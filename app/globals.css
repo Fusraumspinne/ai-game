@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #172033;
+  --surface: #ffffff;
+  --surface-raised: #f6f8fb;
+  --border: #dbe3ee;
+  --muted: #667792;
+  --accent: #2f80ff;
 }
 
 @theme inline {
@@ -12,15 +17,119 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  overscroll-behavior: none;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: rgba(37, 99, 235, 0.18);
+  color: #172033;
+}
+
+* {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #cbd5e1;
+  background-clip: padding-box;
+}
+
+.game-grid {
+  background-color: #f8fafc;
+}
+
+.game-grid > * {
+  position: relative;
+}
+
+.workspace-noise {
+  background-image: none;
+}
+
+.ambient-glow::before {
+  display: none;
+}
+
+.product-device {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #d9dee5;
+  background:
+    radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--device-accent) 20%, transparent), transparent 55%),
+    #f8fafc;
+}
+
+.product-device::after {
+  position: absolute;
+  inset: auto 18% 10% 18%;
+  height: 14%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--device-accent) 22%, transparent);
+  filter: blur(18px);
+  content: "";
+}
+
+.number-flash {
+  animation: number-flash 500ms ease-out;
+}
+
+@keyframes number-flash {
+  from {
+    color: var(--accent);
+    text-shadow: 0 0 16px rgba(89, 225, 208, 0.42);
+  }
+  to {
+    color: inherit;
+    text-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
