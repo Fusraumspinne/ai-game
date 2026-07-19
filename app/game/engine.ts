@@ -50,6 +50,7 @@ const STOCK_HISTORY_LIMIT = 12;
 const STOCK_DAILY_HISTORY_LIMIT = 90;
 const MAX_SIMULATION_DAYS = 3_600;
 const ANNUAL_BASE_RATE = 0.072;
+export const LOAN_TERM_DAYS = DAYS_PER_YEAR * 5;
 const STOCK_TRADING_FEE = 0.0035;
 const DETAILED_COMPANY_HISTORY_MONTHS = 24;
 
@@ -151,6 +152,7 @@ export interface ShareIssueQuote {
   percent: number;
   shares: number;
   proceeds: number;
+  discount: number;
   postTransactionOwnership: number;
   estimatedSharePrice: number;
 }
@@ -159,6 +161,7 @@ export interface BuybackQuote {
   percent: number;
   shares: number;
   cost: number;
+  premium: number;
   postTransactionOwnership: number;
   estimatedSharePrice: number;
   founderStakeValueBefore: number;
@@ -337,6 +340,15 @@ export function getCompanyControl(state: GameState): CompanyControl {
   return { percentage, level: "endangered", label: "Kontrolle gefährdet", detail: "Eine feindliche Mehrheit kann die Führung ablösen.", vulnerable: true };
 }
 
+export function getGovernanceEfficiency(state: GameState) {
+  const level = getCompanyControl(state).level;
+  if (level === "full") return 1.03;
+  if (level === "majority") return 1;
+  if (level === "blocking") return 0.96;
+  if (level === "board") return 0.9;
+  return 0.82;
+}
+
 export function getEmployeeCount(state: GameState) {
   return (Object.keys(DEPARTMENTS) as DepartmentId[]).reduce(
     (total, department) => total + positiveInteger(state.employees[department]),
@@ -390,13 +402,19 @@ export function getWorkforcePlan(state: GameState) {
         DEPARTMENT_WORKFORCE_SHARES[department],
     0,
   );
-  const readiness = clamp(0.4 + weightedCoverage * 0.6, 0.4, 1);
+  const governanceEfficiency = getGovernanceEfficiency(state);
+  const readiness = clamp(
+    (0.4 + weightedCoverage * 0.6) * governanceEfficiency,
+    0.32,
+    1,
+  );
   return {
     currentTotal: getEmployeeCount(state),
     recommendedTotal,
     recommended,
     coverage,
     readiness,
+    governanceEfficiency,
     gap: Math.max(0, recommendedTotal - getEmployeeCount(state)),
   };
 }
@@ -620,6 +638,12 @@ function competitorSeed(competitor: CompetitorState) {
     (total, character) => total + character.charCodeAt(0),
     0,
   );
+}
+
+function marketPulse(competitor: CompetitorState, day: number, salt = 0) {
+  const seed = competitorSeed(competitor) * 0.173 + salt * 19.19;
+  const raw = Math.sin((day + 1) * 12.9898 + seed) * 43_758.5453;
+  return (raw - Math.floor(raw)) * 2 - 1;
 }
 
 interface CompetitorPcOffer {
@@ -882,19 +906,96 @@ export function getPortfolioRealizedProfit(state: GameState) {
   );
 }
 
+export function getEstimatedMonthlyDividend(competitor: CompetitorState) {
+  if (
+    competitor.status !== "active" ||
+    competitor.ownedShares <= 0 ||
+    competitor.profitMargin <= 0
+  ) return 0;
+  const payoutRatio = clamp(
+    0.3 + competitor.brand / 500 - Math.max(0, competitor.growth) * 0.45,
+    0.08,
+    0.42,
+  );
+  const annualProfit = competitor.revenue * competitor.profitMargin;
+  const dividendPerShare =
+    (annualProfit * payoutRatio) /
+    12 /
+    Math.max(1, competitor.sharesOutstanding);
+  return Math.max(0, dividendPerShare * competitor.ownedShares);
+}
+
+export function getEstimatedMonthlyPortfolioIncome(state: GameState) {
+  return state.competitors.reduce(
+    (total, competitor) => total + getEstimatedMonthlyDividend(competitor),
+    0,
+  );
+}
+
 export function getStockTradeQuote(
   competitor: CompetitorState,
   shares: number,
   side: "buy" | "sell",
 ) {
   const normalizedShares = positiveInteger(shares);
-  const gross = normalizedShares * Math.max(0, competitor.price);
+  const marketPrice = Math.max(0, competitor.price);
+  const liquidityShares = Math.max(
+    1_000,
+    competitor.sharesOutstanding * clamp(
+      0.12 + (competitor.financialHealth ?? 60) / 250,
+      0.16,
+      0.5,
+    ),
+  );
+  const participation = normalizedShares / liquidityShares;
+  const priceImpact = clamp(Math.sqrt(participation) * 0.06, 0, 0.2);
+  const direction = side === "buy" ? 1 : -1;
+  const executionPrice = marketPrice * (1 + direction * priceImpact * 0.5);
+  const postTradePrice = Math.max(0.01, marketPrice * (1 + direction * priceImpact));
+  const gross = normalizedShares * executionPrice;
   const fee = gross * STOCK_TRADING_FEE;
   return {
     shares: normalizedShares,
+    marketPrice,
+    executionPrice,
+    postTradePrice,
+    priceImpact,
     gross,
     fee,
     total: side === "buy" ? gross + fee : Math.max(0, gross - fee),
+  };
+}
+
+function applyStockTradePrice(
+  competitor: CompetitorState,
+  quote: ReturnType<typeof getStockTradeQuote>,
+  side: "buy" | "sell",
+  day: number,
+) {
+  const previous = competitor.priceHistory.at(-1);
+  const point = previous?.day === day
+    ? {
+        ...previous,
+        high: Math.max(previous.high, quote.postTradePrice),
+        low: Math.min(previous.low, quote.postTradePrice),
+        close: quote.postTradePrice,
+      }
+    : {
+        day,
+        open: competitor.price,
+        high: Math.max(competitor.price, quote.postTradePrice),
+        low: Math.min(competitor.price, quote.postTradePrice),
+        close: quote.postTradePrice,
+      };
+  const history = previous?.day === day
+    ? competitor.priceHistory.slice(0, -1)
+    : competitor.priceHistory;
+  return {
+    price: quote.postTradePrice,
+    priceHistory: [...history, point].slice(-STOCK_DAILY_HISTORY_LIMIT),
+    lastReason: `${side === "buy" ? "Kaufdruck" : "Verkaufsdruck"} einer großen Order bewegt den Kurs um ${(
+      quote.priceImpact * 100
+    ).toLocaleString("de-DE", { maximumFractionDigits: 2 })} %.`,
   };
 }
 
@@ -988,23 +1089,34 @@ function startAutomaticResearch(state: GameState) {
 /** Remaining borrowing capacity, after existing debt. */
 export function getCreditLimit(state: GameState) {
   const revenueBase = Math.max(state.lastMonthRevenue, state.monthlyRevenue) * 6;
+  const publicFloat = clamp(
+    1 - state.founderShares / Math.max(1, state.totalShares),
+    0,
+    1,
+  );
+  const capitalMarketAccess = 1 + Math.sqrt(publicFloat) * 0.16;
   const financeBonus =
     1 +
     Math.max(0, state.departmentLevels.finance - 1) * 0.06 +
     Math.log1p(Math.max(0, state.employees.finance)) * 0.028;
-  return Math.max(0, (state.valuation * 0.28 + revenueBase) * financeBonus - state.debt);
+  return Math.max(
+    0,
+    (state.valuation * 0.28 + revenueBase) * financeBonus * capitalMarketAccess - state.debt,
+  );
 }
 
 export function getShareIssueQuote(state: GameState, requestedPercent: number): ShareIssueQuote {
   const percent = normalizePercent(requestedPercent);
   const shares = Math.round(state.totalShares * percent);
-  const proceeds = shares * state.sharePrice * 0.94;
+  const discount = clamp(0.035 + percent * 0.9, 0.035, 0.18);
+  const proceeds = shares * state.sharePrice * (1 - discount);
   const totalShares = state.totalShares + shares;
   const valuation = state.valuation + proceeds;
   return {
     percent,
     shares,
     proceeds,
+    discount,
     postTransactionOwnership: (state.founderShares / Math.max(1, totalShares)) * 100,
     estimatedSharePrice: valuation / Math.max(1, totalShares),
   };
@@ -1014,7 +1126,8 @@ export function getBuybackQuote(state: GameState, requestedPercent: number): Buy
   const percent = normalizePercent(requestedPercent);
   const publicShares = Math.max(0, state.totalShares - state.founderShares);
   const shares = Math.min(publicShares, Math.round(state.totalShares * percent));
-  const cost = shares * state.sharePrice * 1.06;
+  const premium = clamp(0.035 + percent * 0.65, 0.035, 0.16);
+  const cost = shares * state.sharePrice * (1 + premium);
   const totalShares = Math.max(1, state.totalShares - shares);
   // The company loses cash, while the tighter float and signal of confidence
   // preserve part of that value. This gives buybacks a modest per-share premium
@@ -1025,6 +1138,7 @@ export function getBuybackQuote(state: GameState, requestedPercent: number): Buy
     percent,
     shares,
     cost,
+    premium,
     postTransactionOwnership: (state.founderShares / totalShares) * 100,
     estimatedSharePrice,
     founderStakeValueBefore: state.founderShares * state.sharePrice,
@@ -1062,7 +1176,7 @@ export function getMergerTerms(
 export function getCompanyHealth(state: GameState): CompanyHealth {
   const observedRevenue = state.lastMonthRevenue || state.monthlyRevenue;
   const observedExpenses = state.lastMonthExpenses || state.monthlyExpenses;
-  const profit = observedRevenue - observedExpenses;
+  const profit = observedRevenue - observedExpenses + state.lastMonthInvestmentIncome;
   const dailyBurn = Math.max(1, observedExpenses / DAYS_PER_MONTH - observedRevenue / DAYS_PER_MONTH);
   const runwayDays = profit >= 0 ? 999 : Math.max(0, state.cash / dailyBurn);
   const score = clamp(
@@ -1269,6 +1383,13 @@ export function getAnnualInterestRate(state: GameState) {
   return clamp(ANNUAL_BASE_RATE + Math.max(0, leverage - 0.2) * 0.09 - financeReduction, 0.035, 0.18);
 }
 
+export function getDailyDebtRepayment(state: GameState) {
+  return Math.min(
+    Math.max(0, state.debt),
+    Math.max(0, finite(state.dailyDebtRepayment)),
+  );
+}
+
 function getConsolidatedBusiness(state: GameState) {
   return state.competitors.reduce(
     (result, competitor) => {
@@ -1303,11 +1424,11 @@ export function calculatePlayerFairValue(state: GameState) {
   const growth = state.lastMonthRevenue > 0
     ? clamp(currentRevenueRunRate / state.lastMonthRevenue - 1, -0.6, 1.2)
     : 0;
-  const revenueMultiple = clamp(0.18 + state.brand / 200 + state.marketShare / 100 + Math.max(0, growth) * 0.15, 0.12, 1.1);
+  const revenueMultiple = clamp(0.16 + state.brand / 220 + state.reputation / 650 + state.marketShare / 110 + Math.max(0, growth) * 0.15, 0.12, 1.1);
   const advancedTracks = PC_RESEARCH_ATTRIBUTE_IDS.filter(
     (attribute) => state.componentResearch[attribute] > 1,
   );
-  const profitMultiple = clamp(1.1 + state.brand / 50 + state.unlockedTech.length * 0.08 + advancedTracks.length * 0.025 + Math.max(0, growth) * 0.8, 1, 5.5);
+  const profitMultiple = clamp(1.05 + state.brand / 55 + state.reputation / 90 + state.unlockedTech.length * 0.08 + advancedTracks.length * 0.025 + Math.max(0, growth) * 0.8, 1, 5.5);
   const legacyTechnologyValue = state.unlockedTech.reduce(
     (total, techId) => total + (getTech(techId)?.cost ?? 0) * 300,
     0,
@@ -1414,10 +1535,29 @@ function updateCompetitor(competitor: CompetitorState, day: number): CompetitorS
     marginChange * 3 +
     growthChange * 4 +
     healthChange * 0.002;
-  const dailyReturn = clamp(valuationGap * 0.035 + operatingSignal, -0.04, 0.04);
+  const volatility = clamp(
+    0.0025 +
+      competitor.debtRatio * 0.004 +
+      (100 - financialHealth) * 0.00008 +
+      Math.abs(growthChange) * 0.35 +
+      Math.abs(marginChange) * 0.8,
+    0.0025,
+    0.016,
+  );
+  const orderFlow = marketPulse(competitor, day) * volatility;
+  const reportingDay = day % 90 === competitorSeed(competitor) % 90;
+  const reportingMove = reportingDay
+    ? clamp((growth - 0.06) * 0.025 + (profitMargin - 0.08) * 0.02, -0.018, 0.018)
+    : 0;
+  const dailyReturn = clamp(
+    valuationGap * 0.022 + operatingSignal + orderFlow + reportingMove,
+    -0.055,
+    0.055,
+  );
   const price = Math.max(0.01, open * (1 + dailyReturn));
-  const high = Math.max(open, price);
-  const low = Math.min(open, price);
+  const intradayRange = volatility * (0.35 + Math.abs(marketPulse(competitor, day, 1)) * 0.8);
+  const high = Math.max(open, price) * (1 + intradayRange);
+  const low = Math.max(0.01, Math.min(open, price) * (1 - intradayRange));
   const priceHistory = [
     ...(competitor.priceHistory ?? []),
     { day, open, high, low, close: price },
@@ -1433,6 +1573,12 @@ function updateCompetitor(competitor: CompetitorState, day: number): CompetitorS
     lastReason = "Steigender Umsatz und eine bessere Marge erhöhen den Unternehmenswert.";
   } else if (marginChange < -0.00005) {
     lastReason = "Eine sinkende Gewinnmarge drückt auf Bewertung und Aktienkurs.";
+  } else if (reportingDay) {
+    lastReason = reportingMove >= 0
+      ? "Der Quartalsbericht bestätigt Wachstum und Profitabilität."
+      : "Der Quartalsbericht bleibt hinter den Markterwartungen zurück.";
+  } else if (Math.abs(orderFlow) > Math.abs(valuationGap * 0.022 + operatingSignal)) {
+    lastReason = "Kurzfristige Orderflüsse sorgen für Volatilität; der Fundamentalwert bleibt der langfristige Anker.";
   } else if (growthChange > 0.00005 || (growth > 0 && revenueMomentum > 0)) {
     lastReason = "Operatives Wachstum und steigender Umsatz stützen den Aktienkurs.";
   } else if (growth < 0) {
@@ -1498,10 +1644,14 @@ function updateAchievements(state: GameState) {
 function closeMonth(state: GameState) {
   const revenue = state.monthlyRevenue;
   const expenses = state.monthlyExpenses;
+  const investmentIncome = getEstimatedMonthlyPortfolioIncome(state);
   let next: GameState = {
     ...state,
+    cash: state.cash + investmentIncome,
+    lifetimeProfit: state.lifetimeProfit + investmentIncome,
     lastMonthRevenue: revenue,
     lastMonthExpenses: expenses,
+    lastMonthInvestmentIncome: investmentIncome,
     monthlyRevenue: 0,
     monthlyExpenses: 0,
     history: compactCompanyHistory([
@@ -1510,9 +1660,9 @@ function closeMonth(state: GameState) {
         day: state.day,
         revenue,
         expenses,
-        profit: revenue - expenses,
+        profit: revenue - expenses + investmentIncome,
         valuation: state.valuation,
-        cash: state.cash,
+        cash: state.cash + investmentIncome,
         debt: state.debt,
         marketShare: state.marketShare,
         employees: getEmployeeCount(state),
@@ -1626,6 +1776,12 @@ function simulateOneDay(state: GameState) {
   const revenue = productRevenue + consolidated.revenue;
   const expenses = productionExpenses + payroll + marketing + interest + consolidated.expenses;
   const profit = revenue - expenses;
+  const cashBeforeDebtRepayment = workingState.cash + profit;
+  const debtRepayment = Math.min(
+    getDailyDebtRepayment(workingState),
+    Math.max(0, cashBeforeDebtRepayment),
+  );
+  const remainingDebt = Math.max(0, workingState.debt - debtRepayment);
   const researchRate = workingState.currentResearch ? getResearchRate(workingState) : 0;
   const competitors = workingState.competitors.map((competitor) => updateCompetitor(competitor, day));
   const bankruptcies = competitors.filter((competitor, index) =>
@@ -1634,7 +1790,10 @@ function simulateOneDay(state: GameState) {
   let next: GameState = {
     ...workingState,
     products,
-    cash: workingState.cash + profit,
+    cash: cashBeforeDebtRepayment - debtRepayment,
+    debt: remainingDebt,
+    dailyDebtRepayment:
+      remainingDebt <= 0.01 ? 0 : workingState.dailyDebtRepayment,
     lifetimeRevenue: workingState.lifetimeRevenue + revenue,
     lifetimeProfit: workingState.lifetimeProfit + profit,
     monthlyRevenue: workingState.monthlyRevenue + revenue,
@@ -1827,6 +1986,17 @@ function normalizeLoadedState(imported: GameState) {
     previousSpeed,
     cash: finite(imported.cash, base.cash),
     debt: Math.max(0, finite(imported.debt)),
+    dailyDebtRepayment: Math.max(
+      0,
+      finite(
+        imported.dailyDebtRepayment,
+        Math.max(0, finite(imported.debt)) / LOAN_TERM_DAYS,
+      ),
+    ),
+    lastMonthInvestmentIncome: Math.max(
+      0,
+      finite(imported.lastMonthInvestmentIncome),
+    ),
     brand: clamp(finite(imported.brand, base.brand), 0, 100),
     reputation: clamp(finite(imported.reputation, base.reputation), 0, 100),
     marketShare: clamp(finite(imported.marketShare, base.marketShare), 0, 100),
@@ -2140,13 +2310,28 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case "BORROW": {
       const amount = finite(action.amount);
       if (amount <= 0 || amount > getCreditLimit(state)) return state;
-      next = { ...state, cash: state.cash + amount, debt: state.debt + amount };
+      next = {
+        ...state,
+        cash: state.cash + amount,
+        debt: state.debt + amount,
+        dailyDebtRepayment:
+          Math.max(0, finite(state.dailyDebtRepayment)) + amount / LOAN_TERM_DAYS,
+      };
       break;
     }
     case "REPAY": {
       const amount = Math.min(Math.max(0, finite(action.amount)), state.debt, Math.max(0, state.cash));
       if (amount <= 0) return state;
-      next = { ...state, cash: state.cash - amount, debt: state.debt - amount };
+      const debt = Math.max(0, state.debt - amount);
+      next = {
+        ...state,
+        cash: state.cash - amount,
+        debt,
+        dailyDebtRepayment:
+          debt <= 0.01
+            ? 0
+            : Math.min(debt, Math.max(0, finite(state.dailyDebtRepayment))),
+      };
       break;
     }
     case "ISSUE_SHARES": {
@@ -2160,8 +2345,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         totalShares,
         valuation,
         sharePrice: quote.estimatedSharePrice,
-        reputation: clamp(state.reputation - quote.percent * 45, 0, 100),
+        reputation: clamp(state.reputation - 1 - quote.percent * 80, 0, 100),
       };
+      next = addNews(next, {
+        id: `share-issue-${state.day}-${state.saveRevision}`,
+        day: state.day,
+        title: "Kapitalerhöhung abgeschlossen",
+        body: `${formatCompactMoney(quote.proceeds)} fließen in die Kasse. Der Gründeranteil sinkt auf ${quote.postTransactionOwnership.toFixed(1)} %.`,
+        category: "finance",
+        tone: quote.postTransactionOwnership >= 50 ? "neutral" : "warning",
+      });
       break;
     }
     case "BUYBACK_SHARES": {
@@ -2174,8 +2367,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         totalShares,
         valuation: quote.estimatedSharePrice * totalShares,
         sharePrice: quote.estimatedSharePrice,
-        reputation: clamp(state.reputation + 1 + quote.percent * 30, 0, 100),
+        reputation: clamp(state.reputation + 1 + quote.percent * 100, 0, 100),
       };
+      next = addNews(next, {
+        id: `share-buyback-${state.day}-${state.saveRevision}`,
+        day: state.day,
+        title: "Aktienrückkauf abgeschlossen",
+        body: `${quote.shares.toLocaleString("de-DE")} Aktien wurden eingezogen. Der Gründeranteil steigt auf ${quote.postTransactionOwnership.toFixed(1)} %.`,
+        category: "finance",
+        tone: "positive",
+      });
       break;
     }
     case "BUY_STOCK": {
@@ -2187,7 +2388,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const ownedShares = competitor.ownedShares + shares;
       const previousBasis = competitor.ownedShares * competitor.averageCost;
       const averageCost = (previousBasis + quote.total) / ownedShares;
-      next = { ...state, cash: state.cash - quote.total, competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, ownedShares, averageCost } : candidate) };
+      next = { ...state, cash: state.cash - quote.total, competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, ...applyStockTradePrice(candidate, quote, "buy", state.day), ownedShares, averageCost } : candidate) };
       break;
     }
     case "SELL_STOCK": {
@@ -2199,7 +2400,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const quote = getStockTradeQuote(competitor, shares, "sell");
       const ownedShares = competitor.ownedShares - shares;
       const realizedProfit = competitor.realizedProfit + quote.total - shares * competitor.averageCost;
-      next = { ...state, cash: state.cash + quote.total, competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, ownedShares, averageCost: ownedShares > 0 ? candidate.averageCost : 0, realizedProfit } : candidate) };
+      next = { ...state, cash: state.cash + quote.total, competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, ...applyStockTradePrice(candidate, quote, "sell", state.day), ownedShares, averageCost: ownedShares > 0 ? candidate.averageCost : 0, realizedProfit } : candidate) };
       break;
     }
     case "ACQUIRE_COMPETITOR": {

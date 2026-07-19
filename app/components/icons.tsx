@@ -17,6 +17,7 @@ import {
   Factory,
   FlaskConical,
   Handshake,
+  CircleHelp,
   LayoutDashboard,
   LockKeyhole,
   Megaphone,
@@ -55,6 +56,7 @@ export type IconName =
   | "deals"
   | "news"
   | "settings"
+  | "help"
   | "pause"
   | "play"
   | "chevronRight"
@@ -104,6 +106,7 @@ const icons: Record<IconName, LucideIcon> = {
   deals: Handshake,
   news: Newspaper,
   settings: Settings,
+  help: CircleHelp,
   pause: Pause,
   play: Play,
   chevronRight: ChevronRight,

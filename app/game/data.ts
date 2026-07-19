@@ -14,7 +14,7 @@ import {
   STARTER_PART_IDS,
 } from "./pc-system";
 
-export const GAME_VERSION = 10;
+export const GAME_VERSION = 11;
 export const STORAGE_KEY = "circuit-tycoon-save-v1";
 export const GAME_START_YEAR = 1984;
 export const DAYS_PER_MONTH = 30;
@@ -1079,6 +1079,7 @@ export function createInitialState(now = Date.now()): GameState {
     previousSpeed: 1,
     cash: 175_000,
     debt: 0,
+    dailyDebtRepayment: 0,
     lifetimeRevenue: 0,
     lifetimeProfit: 0,
     brand: 8,
@@ -1144,6 +1145,7 @@ export function createInitialState(now = Date.now()): GameState {
     monthlyExpenses: 0,
     lastMonthRevenue: 0,
     lastMonthExpenses: 0,
+    lastMonthInvestmentIncome: 0,
     lastDayRevenue: 0,
     lastDayExpenses: 0,
     history: [

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { DAYS_PER_MONTH, DAYS_PER_YEAR, GAME_START_YEAR } from "@/app/game/data";
+import { getDailyDebtRepayment } from "@/app/game/engine";
 import { useGame } from "@/app/game/use-game";
 import type { GameSection } from "@/app/game/types";
 import { GameShell, type GameSpeed } from "./game-shell";
@@ -19,6 +20,7 @@ import {
 import {
   OfflineModal,
   OnboardingModal,
+  GuideModal,
   SettingsModal,
 } from "./game-modals";
 
@@ -84,10 +86,19 @@ export default function GameDashboard() {
     resetGame,
   } = useGame();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const ownership = (state.founderShares / state.totalShares) * 100;
   const displayedRevenue = state.lastMonthRevenue || state.monthlyRevenue;
   const displayedExpenses = state.lastMonthExpenses || state.monthlyExpenses;
-  const monthlyProfit = displayedRevenue - displayedExpenses;
+  const monthlyDebtRepayment = Math.min(
+    state.debt,
+    getDailyDebtRepayment(state) * DAYS_PER_MONTH,
+  );
+  const monthlyProfit =
+    displayedRevenue -
+    displayedExpenses +
+    (state.lastMonthRevenue > 0 ? state.lastMonthInvestmentIncome : 0) -
+    monthlyDebtRepayment;
   const currentSection = state.selectedSection;
 
   const content = useMemo(() => {
@@ -146,6 +157,7 @@ export default function GameDashboard() {
           dispatch({ type: "SET_SPEED", speed })
         }
         onSettings={() => setSettingsOpen(true)}
+        onHelp={() => setGuideOpen(true)}
         contentClassName="game-grid ambient-glow"
       >
         <div
@@ -194,6 +206,7 @@ export default function GameDashboard() {
           }}
         />
       ) : null}
+      {guideOpen ? <GuideModal onClose={() => setGuideOpen(false)} /> : null}
     </>
   );
 }

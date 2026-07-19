@@ -267,6 +267,7 @@ export interface GameState {
   previousSpeed: ActiveGameSpeed;
   cash: number;
   debt: number;
+  dailyDebtRepayment: number;
   lifetimeRevenue: number;
   lifetimeProfit: number;
   brand: number;
@@ -301,6 +302,7 @@ export interface GameState {
   monthlyExpenses: number;
   lastMonthRevenue: number;
   lastMonthExpenses: number;
+  lastMonthInvestmentIncome: number;
   lastDayRevenue: number;
   lastDayExpenses: number;
   history: HistoryPoint[];

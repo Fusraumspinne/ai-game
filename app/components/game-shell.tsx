@@ -27,6 +27,7 @@ export interface GameShellProps {
   speed: GameSpeed;
   onSpeedChange: (speed: GameSpeed) => void;
   onSettings?: () => void;
+  onHelp?: () => void;
   onMenu?: () => void;
   asideTitle?: string;
   className?: string;
@@ -252,12 +253,14 @@ interface DesktopSidebarProps {
   section: GameSection;
   onSectionChange: (section: GameSection) => void;
   onSettings?: () => void;
+  onHelp?: () => void;
 }
 
 function DesktopSidebar({
   section,
   onSectionChange,
   onSettings,
+  onHelp,
 }: DesktopSidebarProps) {
   return (
     <aside className="workspace-noise relative z-20 hidden h-full w-[15.5rem] shrink-0 flex-col border-r border-[#dbe3ee] bg-white lg:flex">
@@ -333,6 +336,16 @@ function DesktopSidebar({
           <span className="text-[0.58rem] font-semibold tracking-[0.12em] text-slate-500 uppercase">System</span>
           <span className="flex items-center gap-1.5 text-[0.6rem] font-medium text-emerald-600"><i className="size-1.5 rounded-full bg-emerald-500" />Online</span>
         </div>
+        {onHelp ? (
+          <button
+            type="button"
+            onClick={onHelp}
+            className="flex h-9 w-full items-center gap-3 rounded-md px-2.5 text-left text-[0.8rem] font-medium text-slate-500 outline-none transition-colors hover:bg-slate-50 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500/70 motion-reduce:transition-none"
+          >
+            <Icon name="help" size={18} />
+            Spielanleitung
+          </button>
+        ) : null}
         {onSettings ? (
           <button
             type="button"
@@ -363,6 +376,7 @@ interface DesktopStatusBarProps {
   speed: GameSpeed;
   onSpeedChange: (speed: GameSpeed) => void;
   onSettings?: () => void;
+  onHelp?: () => void;
 }
 
 function DesktopStatusBar({
@@ -380,6 +394,7 @@ function DesktopStatusBar({
   speed,
   onSpeedChange,
   onSettings,
+  onHelp,
 }: DesktopStatusBarProps) {
   const activeSection = GAME_NAVIGATION.find((item) => item.id === section);
   return (
@@ -412,6 +427,17 @@ function DesktopStatusBar({
       <div className="flex shrink-0 items-center gap-3 border-l border-slate-200 px-3">
         <SaveIndicator label={autosaveLabel} status={autosaveStatus} />
         <SpeedControls speed={speed} onSpeedChange={onSpeedChange} />
+        {onHelp ? (
+          <button
+            type="button"
+            onClick={onHelp}
+            className="grid size-8 place-items-center rounded-lg text-slate-500 outline-none transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500/60 motion-reduce:transition-none"
+            aria-label="Spielanleitung öffnen"
+            title="Spielanleitung"
+          >
+            <Icon name="help" size={17} />
+          </button>
+        ) : null}
         {onSettings ? (
           <button
             type="button"
@@ -442,6 +468,7 @@ interface MobileHeaderProps {
   speed: GameSpeed;
   onSpeedChange: (speed: GameSpeed) => void;
   onSettings?: () => void;
+  onHelp?: () => void;
   onMenu?: () => void;
 }
 
@@ -458,6 +485,7 @@ function MobileHeader({
   speed,
   onSpeedChange,
   onSettings,
+  onHelp,
   onMenu,
 }: MobileHeaderProps) {
   return (
@@ -467,7 +495,7 @@ function MobileHeader({
           <button
             type="button"
             onClick={onMenu}
-            className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-400 outline-none transition-colors hover:bg-slate-100 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-blue-500/70 motion-reduce:transition-none"
+            className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-500 outline-none transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500/70 motion-reduce:transition-none"
             aria-label="Menü öffnen"
           >
             <Icon name="menu" size={19} />
@@ -496,11 +524,21 @@ function MobileHeader({
           onSpeedChange={onSpeedChange}
           compact
         />
+        {onHelp ? (
+          <button
+            type="button"
+            onClick={onHelp}
+            className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-500 outline-none transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+            aria-label="Spielanleitung öffnen"
+          >
+            <Icon name="help" size={18} />
+          </button>
+        ) : null}
         {onSettings ? (
           <button
             type="button"
             onClick={onSettings}
-            className="hidden size-9 shrink-0 place-items-center rounded-lg text-slate-500 outline-none transition-colors hover:bg-slate-100 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-blue-500/70 sm:grid motion-reduce:transition-none"
+            className="hidden size-9 shrink-0 place-items-center rounded-lg text-slate-500 outline-none transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500/70 sm:grid motion-reduce:transition-none"
             aria-label="Einstellungen öffnen"
           >
             <Icon name="settings" size={18} />
@@ -571,7 +609,7 @@ function MobileNavigation({
         {hasAside ? (
           <a
             href="#game-pulse"
-            className="relative flex min-w-[4.35rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6rem] font-medium text-slate-600 outline-none transition-colors hover:bg-slate-100 hover:text-slate-300 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 motion-reduce:transition-none"
+            className="relative flex min-w-[4.35rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6rem] font-medium text-slate-600 outline-none transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 motion-reduce:transition-none"
           >
             <Icon name="news" size={19} />
             <span>Pulse</span>
@@ -600,6 +638,7 @@ export function GameShell({
   speed,
   onSpeedChange,
   onSettings,
+  onHelp,
   onMenu,
   asideTitle = "Pulse",
   className,
@@ -625,6 +664,7 @@ export function GameShell({
         section={section}
         onSectionChange={onSectionChange}
         onSettings={onSettings}
+        onHelp={onHelp}
       />
 
       <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -643,6 +683,7 @@ export function GameShell({
           speed={speed}
           onSpeedChange={onSpeedChange}
           onSettings={onSettings}
+          onHelp={onHelp}
         />
         <MobileHeader
           companyName={companyName}
@@ -658,6 +699,7 @@ export function GameShell({
           speed={speed}
           onSpeedChange={onSpeedChange}
           onSettings={onSettings}
+          onHelp={onHelp}
           onMenu={onMenu}
         />
 

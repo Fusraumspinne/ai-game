@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { DEPARTMENTS, GAME_VERSION, createInitialState } from "./data";
 import {
+  LOAN_TERM_DAYS,
   calculatePlayerFairValue,
   compactCompanyHistory,
   gameReducer,
@@ -13,11 +14,12 @@ import {
   getBuybackQuote,
   getCompanyControl,
   getDailyPcMarketSize,
+  getEstimatedMonthlyPortfolioIncome,
   getFactoryCapacity,
   getHireCost,
+  getGovernanceEfficiency,
   getPortfolioValue,
   getPortfolioRealizedProfit,
-  getPortfolioUnrealizedProfit,
   getProductEconomics,
   getResearchRate,
   getStockTradeQuote,
@@ -57,6 +59,25 @@ function assertClose(actual: number, expected: number, tolerance = 1e-8) {
     `Erwartet ${expected}, erhalten ${actual}`,
   );
 }
+
+test("Kredite werden täglich getilgt und können sofort abgelöst werden", () => {
+  const initial = createInitialState(1_000);
+  const amount = 10_000;
+  const borrowed = gameReducer(initial, { type: "BORROW", amount });
+
+  assert.equal(borrowed.debt, amount);
+  assertClose(borrowed.dailyDebtRepayment, amount / LOAN_TERM_DAYS);
+
+  const afterOneDay = simulateDays(borrowed, 1).state;
+  assertClose(afterOneDay.debt, amount - amount / LOAN_TERM_DAYS);
+
+  const repaid = gameReducer(afterOneDay, {
+    type: "REPAY",
+    amount: afterOneDay.debt,
+  });
+  assert.equal(repaid.debt, 0);
+  assert.equal(repaid.dailyDebtRepayment, 0);
+});
 
 test("ein manuelles Produktionsziel steuert die Tagesproduktion", () => {
   const initial = createInitialState(1_000);
@@ -565,7 +586,8 @@ test("Aktienorders fuehren Einstandskurs und realisierten Gewinn", () => {
   const position = bought.competitors[0];
   assert.equal(position.ownedShares, 10_000);
   assertClose(position.averageCost, buyQuote.total / 10_000);
-  assert.ok(getPortfolioUnrealizedProfit(bought) < 0);
+  assert.ok(position.price > competitor.price);
+  assert.ok(position.priceHistory.at(-1)!.high > competitor.price);
 
   const sold = gameReducer(bought, {
     type: "SELL_STOCK",
@@ -577,19 +599,51 @@ test("Aktienorders fuehren Einstandskurs und realisierten Gewinn", () => {
   assert.ok(getPortfolioRealizedProfit(sold) < 0);
 });
 
-test("Aktienkurse folgen Fundamentaldaten ohne kuenstliche Tagesausschlaege", () => {
+test("Aktienkurse folgen Fundamentaldaten mit realistischen Handelsspannen", () => {
   const result = simulateDays(createInitialState(1_000), 100).state;
   const competitor = result.competitors[0];
   assert.equal(competitor.priceHistory.length, 90);
   for (const point of competitor.priceHistory) {
-    assert.equal(point.high, Math.max(point.open, point.close));
-    assert.equal(point.low, Math.min(point.open, point.close));
+    assert.ok(point.high >= Math.max(point.open, point.close));
+    assert.ok(point.low <= Math.min(point.open, point.close));
     assert.ok(point.low > 0);
   }
+  assert.ok(competitor.priceHistory.some((point) => point.high > Math.max(point.open, point.close)));
+  assert.ok(competitor.priceHistory.some((point) => point.low < Math.min(point.open, point.close)));
   assert.notEqual(
     competitor.priceHistory.at(-1)?.close,
     competitor.priceHistory.at(-2)?.close,
   );
+});
+
+test("profitable Aktien zahlen monatliche Dividenden", () => {
+  const initial = createInitialState(1_000);
+  const target = initial.competitors.find((competitor) => competitor.profitMargin > 0.1);
+  assert.ok(target);
+  const invested: GameState = {
+    ...initial,
+    day: 29,
+    competitors: initial.competitors.map((competitor) => competitor.id === target.id
+      ? { ...competitor, ownedShares: Math.floor(competitor.sharesOutstanding * 0.1), averageCost: competitor.price }
+      : competitor),
+  };
+  const expectedIncome = getEstimatedMonthlyPortfolioIncome(invested);
+  const result = simulateDays(invested, 1).state;
+
+  assert.ok(expectedIncome > 0);
+  assert.ok(result.lastMonthInvestmentIncome > 0);
+  assert.ok(result.cash > invested.cash + result.lastDayRevenue - result.lastDayExpenses);
+});
+
+test("Verwaesserung senkt die operative Kontrolle, Rueckkaeufe stellen sie wieder her", () => {
+  const initial = { ...createInitialState(1_000), cash: 100_000_000 };
+  const issued = gameReducer(initial, { type: "ISSUE_SHARES", percent: 0.5 });
+  const issuedAgain = gameReducer(issued, { type: "ISSUE_SHARES", percent: 0.5 });
+  const efficiencyAfterIssue = getGovernanceEfficiency(issuedAgain);
+  const boughtBack = gameReducer(issuedAgain, { type: "BUYBACK_SHARES", percent: 0.5 });
+
+  assert.ok(efficiencyAfterIssue < getGovernanceEfficiency(initial));
+  assert.ok(getGovernanceEfficiency(boughtBack) > efficiencyAfterIssue);
 });
 
 test("fundamentale Produktzyklen erzeugen Auf- und Abwaertsphasen", () => {

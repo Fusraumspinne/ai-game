@@ -18,6 +18,7 @@ import {
   getBuybackQuote,
   getCompanyControl,
   getCreditLimit,
+  getDailyDebtRepayment,
   getDailyMarketingCost,
   getDailyPayroll,
   getDailySalesCapacity,
@@ -26,8 +27,11 @@ import {
   getFactoryCapacity,
   getFactoryUpgradeCost,
   getFireCost,
+  getGovernanceEfficiency,
   getHireCost,
   getMarketingEfficiency,
+  getEstimatedMonthlyDividend,
+  getEstimatedMonthlyPortfolioIncome,
   getMergerTerms,
   getPortfolioCostBasis,
   getPortfolioRealizedProfit,
@@ -40,6 +44,7 @@ import {
   getWarehouseCapacity,
   getWarehouseUpgradeCost,
   getWorkforcePlan,
+  LOAN_TERM_DAYS,
 } from "../game/engine";
 import type {
   CompetitorState,
@@ -58,6 +63,7 @@ import {
   StatusBadge,
 } from "./game-ui";
 import { Icon, type IconName } from "./icons";
+import { StockPriceChart } from "./trend-chart";
 
 interface SimpleSectionProps {
   state: GameState;
@@ -787,8 +793,8 @@ function MarketingPanel({ state, dispatch }: SimpleSectionProps) {
 }
 
 function FinancePanel({ state, dispatch }: SimpleSectionProps) {
-  const [creditFraction, setCreditFraction] = useState(0.25);
-  const [equityPercent, setEquityPercent] = useState(0.02);
+  const [creditAmount, setCreditAmount] = useState("50000");
+  const [equityPercent, setEquityPercent] = useState(0.05);
   const creditLimit = getCreditLimit(state);
   const control = getCompanyControl(state);
   const annualInterestRate = getAnnualInterestRate(state);
@@ -796,7 +802,7 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
   const buybackQuote = getBuybackQuote(state, equityPercent);
   const observedRevenue = state.lastMonthRevenue || state.monthlyRevenue;
   const observedExpenses = state.lastMonthExpenses || state.monthlyExpenses;
-  const observedProfit = observedRevenue - observedExpenses;
+  const observedProfit = observedRevenue - observedExpenses + state.lastMonthInvestmentIncome;
   const leverage = state.debt / Math.max(1, state.valuation);
   const ratingScore = Math.max(
     10,
@@ -811,15 +817,21 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
   );
   const rating = ratingScore >= 82 ? "AA" : ratingScore >= 68 ? "A" : ratingScore >= 52 ? "BBB" : ratingScore >= 36 ? "BB" : "B";
   const creditPresets = [0.25, 0.5, 1];
-  const amount = Math.max(
-    1_000,
-    Math.floor((creditLimit * creditFraction) / 1_000) * 1_000,
+  const amount = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.max(0, Math.floor(Number(creditAmount) || 0)),
+  );
+  const existingMonthlyPrincipal = Math.min(
+    state.debt,
+    getDailyDebtRepayment(state) * 30,
   );
   const founderValueChange = buybackQuote.founderStakeValueAfter - buybackQuote.founderStakeValueBefore;
+  const governanceEfficiency = getGovernanceEfficiency(state);
+  const monthlyPortfolioIncome = getEstimatedMonthlyPortfolioIncome(state);
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-6">
         <Metric label="Kasse" value={formatCompactMoney(state.cash)} />
         <Metric label="Unternehmenswert" value={formatCompactMoney(state.valuation)} />
         <Metric
@@ -833,6 +845,11 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
           value={rating}
           detail={`${Math.round(ratingScore)}/100 · ${state.employees.finance} Finanzprofis`}
         />
+        <Metric
+          label="Dividenden / Monat"
+          value={formatCompactMoney(monthlyPortfolioIncome)}
+          detail={`${state.lastMonthInvestmentIncome > 0 ? `${formatCompactMoney(state.lastMonthInvestmentIncome)} zuletzt` : "Noch keine Ausschüttung"}`}
+        />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -840,7 +857,7 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
           <PanelHeader
             eyebrow="Fremdkapital"
             title="Kredit verwalten"
-            description={`Kredite erhalten deinen Eigentumsanteil. Der aktuelle Zins beträgt ${percent(annualInterestRate * 100)} pro Jahr.`}
+            description={`Neue Kredite laufen über fünf Spieljahre. Dabei werden täglich Zinsen und ein Teil der Restschuld bezahlt.`}
             action={<StatusBadge tone={ratingScore >= 52 ? "success" : "warning"}>Rating {rating}</StatusBadge>}
           />
           <div className="mt-4 grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1">
@@ -853,12 +870,12 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
               <button
                 key={share}
                 type="button"
-                aria-pressed={creditFraction === share}
-                onClick={() => setCreditFraction(share)}
+                aria-pressed={amount === preset}
+                onClick={() => setCreditAmount(String(preset))}
                 className={`rounded-lg px-2 py-2 font-mono text-[0.68rem] transition-colors ${
-                  creditFraction === share
-                    ? "bg-slate-50 text-white"
-                    : "text-slate-500 hover:bg-slate-50"
+                  amount === preset
+                    ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200"
+                    : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
                 }`}
               >
                 {formatCompactMoney(preset)}
@@ -866,23 +883,43 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
               );
             })}
           </div>
+          <label className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <span className="text-[0.65rem] text-slate-500">Eigener Kreditbetrag</span>
+            <span className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={0}
+                max={Math.floor(creditLimit)}
+                step={1_000}
+                value={creditAmount}
+                onChange={(event) => setCreditAmount(event.target.value)}
+                className="h-8 w-36 rounded-md border border-slate-300 px-2 text-right font-mono text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                aria-label="Kreditbetrag in Euro"
+              />
+              <span className="text-xs text-slate-500">€</span>
+            </span>
+          </label>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <Metric label="Gewählter Betrag" value={formatCompactMoney(amount)} />
             <Metric
-              label="Zins pro Monat"
+              label="Neue Zinsen / Monat"
               value={formatCompactMoney((amount * annualInterestRate) / 12)}
             />
+            <Metric
+              label="Neue Tilgung / Monat"
+              value={formatCompactMoney((amount / LOAN_TERM_DAYS) * 30)}
+              detail={state.debt > 0 ? `Aktuell ${formatCompactMoney(existingMonthlyPrincipal)}` : "Laufzeit 5 Jahre"}
+            />
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
             <ActionButton
-              disabled={amount > creditLimit}
+              disabled={amount <= 0 || amount > creditLimit}
               onClick={() => dispatch({ type: "BORROW", amount })}
             >
               Aufnehmen
             </ActionButton>
             <ActionButton
               variant="secondary"
-              disabled={state.debt <= 0 || state.cash <= 0}
+              disabled={amount <= 0 || state.debt <= 0 || state.cash <= 0}
               onClick={() =>
                 dispatch({
                   type: "REPAY",
@@ -890,7 +927,14 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
                 })
               }
             >
-              Tilgen
+              Betrag tilgen
+            </ActionButton>
+            <ActionButton
+              variant="secondary"
+              disabled={state.debt <= 0 || state.cash < state.debt}
+              onClick={() => dispatch({ type: "REPAY", amount: state.debt })}
+            >
+              Alles tilgen
             </ActionButton>
           </div>
         </Panel>
@@ -909,8 +953,8 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
               </StatusBadge>
             }
           />
-          <div className="mt-4 grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1">
-            {[0.01, 0.02, 0.05].map((share) => (
+          <div className="mt-4 grid grid-cols-4 gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1">
+            {[0.01, 0.05, 0.1, 0.2].map((share) => (
               <button
                 key={share}
                 type="button"
@@ -918,13 +962,33 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
                 onClick={() => setEquityPercent(share)}
                 className={`rounded-lg px-2 py-2 font-mono text-[0.68rem] transition-colors ${
                   equityPercent === share
-                    ? "bg-slate-50 text-white"
-                    : "text-slate-500 hover:bg-slate-50"
+                    ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200"
+                    : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
                 }`}
               >
                 {percent(share * 100, 0)}
               </button>
             ))}
+          </div>
+          <label className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <span className="text-[0.65rem] text-slate-500">Eigener Prozentsatz</span>
+            <span className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={0.1}
+                max={50}
+                step={0.1}
+                value={Number((equityPercent * 100).toFixed(1))}
+                onChange={(event) => setEquityPercent(Math.min(0.5, Math.max(0.001, Number(event.target.value) / 100 || 0.001)))}
+                className="h-8 w-24 rounded-md border border-slate-300 px-2 text-right font-mono text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                aria-label="Prozentsatz für Aktienausgabe oder Rückkauf"
+              />
+              <span className="text-xs text-slate-500">%</span>
+            </span>
+          </label>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Metric label="Gründerkontrolle" value={control.label} detail={`${percent(control.percentage)} Stimmrechte`} />
+            <Metric label="Entscheidungstempo" value={percent(governanceEfficiency * 100, 0)} detail="Wirkt auf Organisation, Forschung und Vertrieb" />
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -936,6 +1000,7 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
                 <p>Gründeranteil {percent(control.percentage)} → {percent(issueQuote.postTransactionOwnership)}</p>
                 <p>Kurs {formatMoney(state.sharePrice)} → ca. {formatMoney(issueQuote.estimatedSharePrice)}</p>
                 <p>{issueQuote.shares.toLocaleString("de-DE")} neue Aktien</p>
+                <p className="text-amber-700">Emissionsabschlag {percent(issueQuote.discount * 100)}</p>
               </div>
               <ActionButton
                 className="mt-3"
@@ -956,6 +1021,7 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
               <div className="mt-2 space-y-1 text-[0.62rem] text-slate-500">
                 <p>Gründeranteil {percent(control.percentage)} → {percent(buybackQuote.postTransactionOwnership)}</p>
                 <p>Kurs {formatMoney(state.sharePrice)} → ca. {formatMoney(buybackQuote.estimatedSharePrice)}</p>
+                <p className="text-amber-700">Rückkaufprämie {percent(buybackQuote.premium * 100)}</p>
                 <p className={founderValueChange >= 0 ? "text-emerald-400" : "text-rose-400"}>
                   Wert deines Anteils {founderValueChange >= 0 ? "+" : ""}{formatCompactMoney(founderValueChange)}
                 </p>
@@ -1037,6 +1103,9 @@ function StockCard({
   const chartValues = chartHistory.length > 1
     ? chartHistory.map((point) => point.close)
     : company.history.slice(-30);
+  const chartLabels = chartHistory.length > 1
+    ? chartHistory.map((point) => `Tag ${point.day}`)
+    : chartValues.map((_, index) => index === chartValues.length - 1 ? "Heute" : `−${chartValues.length - index - 1} T`);
   const previousPrice = chartValues[0] ?? company.price;
   const periodChange =
     previousPrice > 0
@@ -1060,27 +1129,8 @@ function StockCard({
     (company.ownedShares / Math.max(1, company.sharesOutstanding)) * 100;
   const periodHigh = Math.max(company.price, ...chartValues);
   const periodLow = Math.min(company.price, ...chartValues);
-  const chartMin = Math.min(...chartValues, company.price);
-  const chartMax = Math.max(...chartValues, company.price);
-  const chartRange = chartMax - chartMin || 1;
-  const chartY = (value: number) => 44 - ((value - chartMin) / chartRange) * 36;
-  const chartX = (index: number) => chartValues.length > 1
-    ? 13 + (index / (chartValues.length - 1)) * 103
-    : 116;
-  const chartPoints = chartValues.map((value, index) => ({
-    x: chartX(index),
-    y: chartY(value),
-  }));
-  const linePath = chartPoints
-    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
-    .join(" ");
-  const areaPath = chartPoints.length > 0
-    ? `${linePath} L116,44 L13,44 Z`
-    : "";
-  const chartAverage = chartValues.reduce((total, value) => total + value, 0) /
-    Math.max(1, chartValues.length);
   const trendColor = periodChange >= 0 ? "#16a34a" : "#dc2626";
-  const fairValueVisible = company.fairValue >= chartMin && company.fairValue <= chartMax;
+  const monthlyDividend = getEstimatedMonthlyDividend(company);
 
   return (
     <Panel padding="none" className="overflow-hidden">
@@ -1121,45 +1171,13 @@ function StockCard({
       </div>
 
       <div className="px-3 pb-3">
-        <svg
-          viewBox="0 0 120 56"
-          className="h-32 w-full rounded-md border border-slate-200 bg-white"
-          role="img"
-          aria-label={`Fundamentaler 90-Tage-Aktienchart von ${company.name}`}
-        >
-          <defs>
-            <linearGradient id={`stock-area-${company.id}`} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor={trendColor} stopOpacity="0.16" />
-              <stop offset="100%" stopColor={trendColor} stopOpacity="0.01" />
-            </linearGradient>
-          </defs>
-          {[8, 26, 44].map((y, index) => {
-            const value = chartMax - (chartRange * index) / 2;
-            return (
-              <g key={y}>
-                <line x1="13" x2="116" y1={y} y2={y} stroke="#dbe3ee" strokeWidth="0.45" strokeDasharray="2 2" />
-                <text x="2" y={y + 1} fill="#64748b" fontSize="2.8">{value.toFixed(2)}</text>
-              </g>
-            );
-          })}
-          <line x1="13" x2="116" y1={chartY(chartAverage)} y2={chartY(chartAverage)} stroke="#94a3b8" strokeWidth="0.45" strokeDasharray="1.5 1.5" />
-          {fairValueVisible ? (
-            <line x1="13" x2="116" y1={chartY(company.fairValue)} y2={chartY(company.fairValue)} stroke="#2563eb" strokeWidth="0.65" strokeDasharray="3 2" />
-          ) : null}
-          {areaPath ? <path d={areaPath} fill={`url(#stock-area-${company.id})`} /> : null}
-          {linePath ? (
-            <path d={linePath} fill="none" stroke={trendColor} strokeWidth="1.25" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-          ) : null}
-          {chartPoints.map((point, index) => index % 5 === 0 ? (
-            <circle key={index} cx={point.x} cy={point.y} r="0.8" fill="white" stroke={trendColor} strokeWidth="0.55" />
-          ) : null)}
-          {chartPoints.at(-1) ? (
-            <circle cx={chartPoints.at(-1)?.x} cy={chartPoints.at(-1)?.y} r="1.45" fill={trendColor} stroke="white" strokeWidth="0.7" vectorEffect="non-scaling-stroke" />
-          ) : null}
-          <text x="13" y="52" fill="#64748b" fontSize="2.8">−90 T</text>
-          <text x="64.5" y="52" fill="#64748b" fontSize="2.8" textAnchor="middle">−45 T</text>
-          <text x="116" y="52" fill="#64748b" fontSize="2.8" textAnchor="end">Heute</text>
-        </svg>
+        <StockPriceChart
+          ariaLabel={`Fundamentaler 90-Tage-Aktienchart von ${company.name}`}
+          labels={chartLabels}
+          values={chartValues}
+          fairValue={company.fairValue}
+          color={trendColor}
+        />
         <div className="mt-1.5 flex flex-wrap justify-between gap-2 font-mono text-[0.58rem] text-slate-500">
           <span>90T Tief {formatMoney(periodLow, 2)}</span>
           <span><i className="mr-1 inline-block w-3 border-t border-dashed border-blue-600" />Fairer Wert</span>
@@ -1167,11 +1185,17 @@ function StockCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-px border-y border-slate-200 bg-slate-200 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-px border-y border-slate-200 bg-slate-200 sm:grid-cols-3 xl:grid-cols-6">
         <div className="bg-white p-2.5">
           <p className="text-[0.55rem] text-slate-600 uppercase">Umsatz</p>
           <p className="mt-1 font-mono text-[0.68rem] text-slate-700">
             {formatCompactMoney(company.revenue)}
+          </p>
+        </div>
+        <div className="bg-white p-2.5">
+          <p className="text-[0.55rem] text-slate-600 uppercase">Deine Dividende</p>
+          <p className="mt-1 font-mono text-[0.68rem] text-emerald-700">
+            {formatCompactMoney(monthlyDividend)} / Monat
           </p>
         </div>
         <div className="bg-white p-2.5">
@@ -1270,8 +1294,8 @@ function StockCard({
           </ActionButton>
         </div>
         <div className="mt-2 flex items-center justify-between gap-3 text-[0.58rem] text-slate-500">
-          <span>Kauf inkl. {formatCompactMoney(buyQuote.fee)} Gebühr</span>
-          <span>Verkauf netto {formatCompactMoney(sellQuote.total)}</span>
+          <span>Kaufkurs {formatMoney(buyQuote.executionPrice, 2)} · Einfluss +{percent(buyQuote.priceImpact * 100)}</span>
+          <span>Verkaufskurs {formatMoney(sellQuote.executionPrice, 2)} · Einfluss −{percent(sellQuote.priceImpact * 100)}</span>
         </div>
         {company.ownedShares > 0 ? (
           <ActionButton

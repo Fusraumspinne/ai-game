@@ -1,4 +1,48 @@
-import { useId, type ReactNode } from "react";
+"use client";
+
+import {
+  BarElement,
+  CategoryScale,
+  Chart as ChartJS,
+  Filler,
+  Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
+  Tooltip,
+  type ChartOptions,
+  type TooltipItem,
+} from "chart.js";
+import type { ReactNode } from "react";
+import { Bar, Line } from "react-chartjs-2";
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Filler,
+  Tooltip,
+  Legend,
+);
+
+const gridColor = "rgba(148, 163, 184, 0.22)";
+const tickColor = "#64748b";
+const chartFont = { family: "ui-monospace, SFMono-Regular, Menlo, monospace", size: 10 };
+
+function compactNumber(value: number) {
+  return new Intl.NumberFormat("de-DE", {
+    notation: Math.abs(value) >= 10_000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function tooltipText(value: ReactNode, fallback: number) {
+  return typeof value === "string" || typeof value === "number"
+    ? String(value)
+    : compactNumber(fallback);
+}
 
 export interface TrendSeries {
   label: string;
@@ -18,102 +62,278 @@ export function TrendChart({
   ariaLabel: string;
   includeZero?: boolean;
 }) {
-  const gradientId = useId().replaceAll(":", "");
-  const allValues = series.flatMap((item) =>
-    item.values.filter((value) => Number.isFinite(value)),
+  const count = Math.max(0, ...series.map((item) => item.values.length));
+  const resolvedLabels = Array.from(
+    { length: count },
+    (_, index) => labels?.[index] ?? String(index + 1),
   );
-  const minimum = Math.min(...allValues, includeZero ? 0 : Number.POSITIVE_INFINITY);
-  const maximum = Math.max(...allValues, includeZero ? 0 : Number.NEGATIVE_INFINITY);
-  const safeMinimum = Number.isFinite(minimum) ? minimum : 0;
-  const safeMaximum = Number.isFinite(maximum) ? maximum : 1;
-  const range = safeMaximum - safeMinimum || Math.max(1, Math.abs(safeMaximum));
-  const x = (index: number, count: number) =>
-    count <= 1 ? 50 : 3 + (index / (count - 1)) * 94;
-  const y = (value: number) => 36 - ((value - safeMinimum) / range) * 30;
+  const options: ChartOptions<"line"> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 180 },
+    normalized: true,
+    interaction: { mode: "index", intersect: false },
+    layout: { padding: { top: 4, right: 5 } },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: "#0f172a",
+        titleColor: "#f8fafc",
+        bodyColor: "#e2e8f0",
+        padding: 10,
+        cornerRadius: 6,
+        displayColors: true,
+        callbacks: {
+          label: (context: TooltipItem<"line">) => {
+            const item = series[context.datasetIndex];
+            const value = context.parsed.y ?? 0;
+            const formatted = item?.formatValue?.(value);
+            return `${item?.label ?? "Wert"}: ${tooltipText(formatted, value)}`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        border: { display: false },
+        grid: { display: false },
+        ticks: {
+          autoSkip: true,
+          maxTicksLimit: 6,
+          maxRotation: 0,
+          color: tickColor,
+          font: chartFont,
+        },
+      },
+      y: {
+        beginAtZero: includeZero,
+        border: { display: false },
+        grid: { color: gridColor, drawTicks: false },
+        ticks: {
+          color: tickColor,
+          font: chartFont,
+          maxTicksLimit: 5,
+          padding: 7,
+          callback: (value) => compactNumber(Number(value)),
+        },
+      },
+    },
+  };
 
   return (
     <div>
-      <svg
-        viewBox="0 0 100 42"
-        preserveAspectRatio="none"
-        className="h-44 w-full"
-        role="img"
-        aria-label={ariaLabel}
-      >
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={series[0]?.color ?? "#2563eb"} stopOpacity="0.18" />
-            <stop offset="100%" stopColor={series[0]?.color ?? "#2563eb"} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {[6, 16, 26, 36].map((lineY) => (
-          <line
-            key={lineY}
-            x1="3"
-            x2="97"
-            y1={lineY}
-            y2={lineY}
-            stroke="#e2e8f0"
-            strokeWidth="0.45"
-            strokeDasharray="2 2"
-          />
-        ))}
-        {series.map((item, seriesIndex) => {
-          const path = item.values
-            .map(
-              (value, index) =>
-                `${index === 0 ? "M" : "L"} ${x(index, item.values.length)} ${y(value)}`,
-            )
-            .join(" ");
-          return (
-            <g key={item.label}>
-              {seriesIndex === 0 && path ? (
-                <path d={`${path} L 97 36 L 3 36 Z`} fill={`url(#${gradientId})`} />
-              ) : null}
-              <path
-                d={path}
-                fill="none"
-                stroke={item.color}
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                vectorEffect="non-scaling-stroke"
-              />
-              {item.values.length ? (
-                <circle
-                  cx={x(item.values.length - 1, item.values.length)}
-                  cy={y(item.values.at(-1) ?? 0)}
-                  r="1.15"
-                  fill="white"
-                  stroke={item.color}
-                  strokeWidth="0.8"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ) : null}
-            </g>
-          );
-        })}
-      </svg>
-      {labels?.length ? (
-        <div className="-mt-1 flex justify-between font-mono text-[0.58rem] text-slate-500">
-          <span>{labels[0]}</span>
-          <span>{labels.at(-1)}</span>
-        </div>
-      ) : null}
+      <div className="h-44 w-full">
+        <Line
+          role="img"
+          aria-label={ariaLabel}
+          data={{
+            labels: resolvedLabels,
+            datasets: series.map((item, index) => ({
+              label: item.label,
+              data: [...item.values],
+              borderColor: item.color,
+              backgroundColor: `${item.color}16`,
+              borderWidth: 2,
+              pointRadius: 0,
+              pointHoverRadius: 4,
+              pointHoverBorderWidth: 2,
+              pointHoverBackgroundColor: "#ffffff",
+              pointHoverBorderColor: item.color,
+              fill: index === 0 && series.length === 1 ? "origin" : false,
+              tension: 0,
+            })),
+          }}
+          options={options}
+        />
+      </div>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-600">
         {series.map((item) => {
           const current = item.values.at(-1) ?? 0;
           return (
             <span key={item.label} className="inline-flex items-center gap-2">
-              <i className="inline-block size-2 rounded-full" style={{ backgroundColor: item.color }} />
+              <i className="inline-block size-2 rounded-sm" style={{ backgroundColor: item.color }} />
               {item.label}
-              <strong className="font-mono font-medium text-slate-900">
-                {item.formatValue ? item.formatValue(current) : current.toLocaleString("de-DE", { maximumFractionDigits: 1 })}
+              <strong className="font-mono font-medium text-slate-900 tabular-nums">
+                {item.formatValue ? item.formatValue(current) : compactNumber(current)}
               </strong>
             </span>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+export function GroupedBarChart({
+  labels,
+  series,
+  ariaLabel,
+}: {
+  labels: readonly string[];
+  series: readonly TrendSeries[];
+  ariaLabel: string;
+}) {
+  const options: ChartOptions<"bar"> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 180 },
+    normalized: true,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: {
+        position: "bottom",
+        align: "start",
+        labels: {
+          boxWidth: 9,
+          boxHeight: 9,
+          color: "#475569",
+          padding: 18,
+          font: { family: "Arial, Helvetica, sans-serif", size: 11 },
+        },
+      },
+      tooltip: {
+        backgroundColor: "#0f172a",
+        padding: 10,
+        cornerRadius: 6,
+        callbacks: {
+          label: (context: TooltipItem<"bar">) => {
+            const item = series[context.datasetIndex];
+            const value = context.parsed.y ?? 0;
+            return `${item?.label ?? "Wert"}: ${tooltipText(item?.formatValue?.(value), value)}`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        border: { display: false },
+        grid: { display: false },
+        ticks: { color: tickColor, font: chartFont, maxRotation: 0 },
+      },
+      y: {
+        beginAtZero: true,
+        border: { display: false },
+        grid: { color: gridColor, drawTicks: false },
+        ticks: {
+          color: tickColor,
+          font: chartFont,
+          padding: 7,
+          maxTicksLimit: 5,
+          callback: (value) => compactNumber(Number(value)),
+        },
+      },
+    },
+  };
+
+  return (
+    <div className="h-56 w-full">
+      <Bar
+        role="img"
+        aria-label={ariaLabel}
+        data={{
+          labels: [...labels],
+          datasets: series.map((item) => ({
+            label: item.label,
+            data: [...item.values],
+            backgroundColor: item.color,
+            borderRadius: 3,
+            borderSkipped: false,
+            maxBarThickness: 28,
+          })),
+        }}
+        options={options}
+      />
+    </div>
+  );
+}
+
+export function StockPriceChart({
+  labels,
+  values,
+  fairValue,
+  color,
+  ariaLabel,
+}: {
+  labels: readonly string[];
+  values: readonly number[];
+  fairValue: number;
+  color: string;
+  ariaLabel: string;
+}) {
+  const options: ChartOptions<"line"> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 160 },
+    normalized: true,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: "#0f172a",
+        padding: 9,
+        cornerRadius: 6,
+        callbacks: {
+          label: (context: TooltipItem<"line">) =>
+            `${context.dataset.label}: ${(context.parsed.y ?? 0).toLocaleString("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 })}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        border: { display: false },
+        grid: { display: false },
+        ticks: { color: tickColor, font: chartFont, autoSkip: true, maxTicksLimit: 3, maxRotation: 0 },
+      },
+      y: {
+        border: { display: false },
+        grid: { color: gridColor, drawTicks: false },
+        ticks: {
+          color: tickColor,
+          font: chartFont,
+          padding: 6,
+          maxTicksLimit: 4,
+          callback: (value) => Number(value).toLocaleString("de-DE", { maximumFractionDigits: 2 }),
+        },
+      },
+    },
+  };
+
+  return (
+    <div className="h-36 w-full rounded-md border border-slate-200 bg-white p-2">
+      <Line
+        role="img"
+        aria-label={ariaLabel}
+        data={{
+          labels: [...labels],
+          datasets: [
+            {
+              label: "Kurs",
+              data: [...values],
+              borderColor: color,
+              backgroundColor: `${color}14`,
+              borderWidth: 2,
+              pointRadius: 0,
+              pointHoverRadius: 4,
+              pointHoverBorderWidth: 2,
+              pointHoverBackgroundColor: "#ffffff",
+              pointHoverBorderColor: color,
+              fill: true,
+              tension: 0,
+            },
+            {
+              label: "Fairer Wert",
+              data: values.map(() => fairValue),
+              borderColor: "#2563eb",
+              borderWidth: 1,
+              borderDash: [5, 4],
+              pointRadius: 0,
+              fill: false,
+              tension: 0,
+            },
+          ],
+        }}
+        options={options}
+      />
     </div>
   );
 }

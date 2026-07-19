@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createInitialState, GAME_VERSION, STORAGE_KEY, TECH_TREE } from "./data";
-import { compactCompanyHistory, gameReducer, simulateDays } from "./engine";
+import {
+  LOAN_TERM_DAYS,
+  compactCompanyHistory,
+  gameReducer,
+  simulateDays,
+} from "./engine";
 import {
   STARTER_PART_IDS,
   getComponentResearchProject,
@@ -20,10 +25,14 @@ import type { GameState, SimulationSummary } from "./types";
 
 type SaveStatus = "saved" | "saving" | "error";
 
-function withoutLegacyProductHistory<T extends object>(product: T): T {
+function withoutTransientProductMetrics<T extends object>(product: T): T {
   const clean = { ...product } as T & Record<string, unknown>;
   delete clean.unitsSold;
   delete clean.lifetimeRevenue;
+  delete clean.lastDemand;
+  delete clean.lastProduction;
+  delete clean.lastSales;
+  delete clean.lastLostSales;
   return clean;
 }
 
@@ -113,28 +122,28 @@ export function mergeLoadedState(input: unknown): GameState | null {
     takeoverDefenseDays: 0,
     speed,
     previousSpeed,
+    dailyDebtRepayment:
+      typeof parsed.dailyDebtRepayment === "number"
+        ? Math.max(0, parsed.dailyDebtRepayment)
+        : Math.max(0, parsed.debt ?? 0) / LOAN_TERM_DAYS,
     employees: { ...base.employees, ...(parsed.employees ?? {}) },
     departmentLevels: {
       ...base.departmentLevels,
       ...(parsed.departmentLevels ?? {}),
     },
     products: Array.isArray(parsed.products)
-      ? parsed.products.map((product) => ({
-          ...withoutLegacyProductHistory(product),
+      ? parsed.products.filter((product) => product.active !== false).map((product) => ({
+          ...withoutTransientProductMetrics(product),
           productionTarget:
             saveVersion < 7
               ? null
               : typeof product.productionTarget === "number" || product.productionTarget === null
               ? product.productionTarget
               : null,
-          lastLostSales:
-            typeof product.lastLostSales === "number" ? product.lastLostSales : 0,
-          lastDemand:
-            typeof product.lastDemand === "number" ? product.lastDemand : 0,
-          lastProduction:
-            typeof product.lastProduction === "number" ? product.lastProduction : 0,
-          lastSales:
-            typeof product.lastSales === "number" ? product.lastSales : 0,
+          lastLostSales: 0,
+          lastDemand: 0,
+          lastProduction: 0,
+          lastSales: 0,
           configuration: product.configuration
             ? normalizePcConfiguration(product.configuration)
             : undefined,
@@ -179,16 +188,24 @@ export function mergeLoadedState(input: unknown): GameState | null {
 }
 
 function serializeState(state: GameState, now = Date.now()) {
-  const products = state.products.map((product) => {
-    const compact = { ...product } as Partial<typeof product> & Record<string, unknown>;
-    delete compact.lastDemand;
-    delete compact.lastProduction;
-    delete compact.lastSales;
-    delete compact.lastLostSales;
-    delete compact.unitsSold;
-    delete compact.lifetimeRevenue;
-    return compact;
-  });
+  // Tageskennzahlen werden nach dem Laden neu berechnet. Eine Positivliste
+  // verhindert, dass Produktstatistiken später versehentlich im Save landen.
+  const products = state.products
+    .filter((product) => product.active)
+    .map((product) => ({
+      id: product.id,
+      blueprintId: product.blueprintId,
+      name: product.name,
+      price: product.price,
+      launchedDay: product.launchedDay,
+      inventory: product.inventory,
+      active: true,
+      qualityBonus: product.qualityBonus,
+      productionTarget: product.productionTarget,
+      configuration: product.configuration,
+      audience: product.audience,
+      marketSegment: product.marketSegment,
+    }));
   const competitors = state.competitors.map((competitor) => ({
     ...competitor,
     history: competitor.history.slice(-12),

@@ -31,18 +31,18 @@ function ModalFrame({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-[#03070b]/82 p-3 backdrop-blur-sm sm:p-6" role="presentation">
+    <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-slate-950/55 p-3 backdrop-blur-[2px] sm:p-6" role="presentation">
       <div
         ref={frameRef}
         role="dialog"
         aria-modal="true"
-        className={`relative my-auto w-full ${width} overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_28px_100px_rgba(0,0,0,.55)]`}
+        className={`relative my-auto w-full ${width} overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,.25)]`}
       >
         {onClose ? (
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 z-10 grid size-9 place-items-center rounded-xl border border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="absolute top-4 right-4 z-10 grid size-9 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-blue-500"
             aria-label={closeLabel}
           >
             <Icon name="x" size={17} />
@@ -60,7 +60,7 @@ export function OnboardingModal({ dispatch }: { dispatch: Dispatch<GameAction> }
       <div className="relative overflow-hidden border-b border-slate-200 px-6 pt-8 pb-7 sm:px-9 sm:pt-10">
         <div className="absolute top-[-9rem] right-[-7rem] size-72 rounded-full bg-blue-500/[0.08] blur-3xl" />
         <StatusBadge tone="info" dot>JANUAR 1984 · GARAGENPHASE</StatusBadge>
-        <h1 className="mt-5 max-w-xl text-3xl font-semibold tracking-[-0.045em] text-white sm:text-4xl">
+        <h1 className="mt-5 max-w-xl text-3xl font-semibold tracking-[-0.045em] text-slate-950 sm:text-4xl">
           Eine kleine Werkstatt.
           <br />
           <span className="text-blue-600">Eine große Zukunft.</span>
@@ -110,6 +110,101 @@ export function OnboardingModal({ dispatch }: { dispatch: Dispatch<GameAction> }
   );
 }
 
+export function GuideModal({ onClose }: { onClose: () => void }) {
+  const sections = [
+    {
+      icon: "monitor" as const,
+      title: "1. Produkt entwickeln",
+      text: "Erforsche einzelne CPU-, GPU-, RAM-, Speicher- und Plattformwerte. Stelle danach im PC-Labor einen kompatiblen Low-End-, Mid-Range- oder High-End-PC zusammen. Ein schneller Chip braucht auch Mainboard, Netzteil und Kühlung auf passendem Niveau.",
+    },
+    {
+      icon: "trendUp" as const,
+      title: "2. Nachfrage gewinnen",
+      text: "Jedes Segment besitzt einen gemeinsamen Markt. Leistung, Preis, Qualität, Marke und Vertriebsreichweite entscheiden, welchen Anteil dein Modell gegen alle Konkurrenten erhält. Zu alte oder zu teure PCs verlieren Absatz.",
+    },
+    {
+      icon: "production" as const,
+      title: "3. Produktion ausbalancieren",
+      text: "Fabrik, Automatisierung und Produktionspersonal begrenzen gemeinsam den Ausstoß. Verkaufte Geräte können direkt ausgeliefert werden; Überschüsse belegen das Lager. Zu viel Bestand bindet Kapital, zu wenig Produktion erzeugt verlorene Verkäufe.",
+    },
+    {
+      icon: "people" as const,
+      title: "4. Unternehmen skalieren",
+      text: "Produktion, Forschung, Marketing, Vertrieb und Finanzen brauchen passende Teams und Abteilungsstufen. Sehr große Belegschaften ohne Infrastruktur kosten Geld, liefern aber kaum zusätzlichen Nutzen.",
+    },
+    {
+      icon: "marketing" as const,
+      title: "5. Marke aufbauen",
+      text: "Marketing erhöht Bekanntheit und Reichweite mit abnehmendem Grenznutzen. Das sinnvolle Budget wächst mit dem adressierbaren Markt. Kampagnen helfen zeitweise, ersetzen aber kein konkurrenzfähiges Produkt.",
+    },
+    {
+      icon: "finance" as const,
+      title: "6. Kapital finanzieren",
+      text: "Kredite erhalten deine Stimmrechte, verursachen aber Zinsen. Neue Aktien bringen Cash und besseren Kapitalmarktzugang, verwässern jedoch Kontrolle und werden mit Emissionsabschlag verkauft. Rückkäufe kosten eine Prämie, erhöhen aber Anteil und Entscheidungstempo.",
+    },
+    {
+      icon: "stocks" as const,
+      title: "7. Aktien investieren",
+      text: "Kurse folgen Umsatz, Marge, Wachstum, Verschuldung, Produktzyklen und Marktstimmung. Große Orders bewegen Kauf- und Verkaufskurs. Profitable Beteiligungen zahlen monatliche Dividenden; bei einer Insolvenz werden die Aktien wertlos.",
+    },
+    {
+      icon: "deals" as const,
+      title: "8. Konkurrenten übernehmen",
+      text: "Bereits gehaltene Aktien reduzieren den späteren Übernahmepreis. Eine Fusion schont Cash, gibt aber neue eigene Aktien aus. Kartellrecht und dein Gründeranteil können Transaktionen blockieren.",
+    },
+  ];
+
+  return (
+    <ModalFrame onClose={onClose} width="max-w-4xl" closeLabel="Spielanleitung schließen">
+      <div className="max-h-[88vh] overflow-y-auto">
+        <div className="border-b border-slate-200 px-6 py-6 sm:px-8">
+          <span className="grid size-10 place-items-center rounded-xl bg-blue-50 text-blue-700">
+            <Icon name="help" size={19} />
+          </span>
+          <p className="mt-4 text-[0.62rem] font-semibold tracking-[0.15em] text-blue-600 uppercase">Spielanleitung</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-[-0.035em] text-slate-950">Vom Garagen-PC zum Technologiekonzern</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            Dein Ziel ist kein festes Endlevel: Baue ein dauerhaft profitables Unternehmen auf, halte technologisch mit der Konkurrenz Schritt und entscheide, ob du Wachstum mit Gewinnen, Krediten oder Eigentum finanzierst.
+          </p>
+        </div>
+
+        <div className="p-5 sm:p-8">
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <p className="text-xs font-semibold text-blue-900">Schnellstart</p>
+            <p className="mt-1.5 text-xs leading-5 text-blue-800/80">
+              Prüfe zuerst Preis und Tagesnachfrage des Start-PCs. Halte Produktion knapp über dem erwarteten Absatz, erforsche eine ausgewogene nächste Komponente und erweitere Personal oder Gebäude nur dort, wo tatsächlich ein Engpass angezeigt wird.
+            </p>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            {sections.map((section) => (
+              <div key={section.title} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center gap-2.5">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-700">
+                    <Icon name={section.icon} size={16} />
+                  </span>
+                  <h3 className="text-sm font-semibold text-slate-900">{section.title}</h3>
+                </div>
+                <p className="mt-2.5 text-xs leading-5 text-slate-600">{section.text}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-[0.62rem] font-semibold text-slate-700 uppercase">Zeit</p><p className="mt-1 text-xs leading-5 text-slate-500">1× entspricht einem Spieltag pro Sekunde. 5× und 10× beschleunigen, Pause stoppt die Simulation.</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-[0.62rem] font-semibold text-slate-700 uppercase">Buchhaltung</p><p className="mt-1 text-xs leading-5 text-slate-500">Jahresansichten zeigen Umsatz, Kosten, Gewinn, Unternehmenswert, Cash und Marktanteil seit der Gründung.</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-[0.62rem] font-semibold text-slate-700 uppercase">Speichern</p><p className="mt-1 text-xs leading-5 text-slate-500">Der Spielstand wird lokal gespeichert. Unter Einstellungen kannst du JSON-Backups exportieren oder importieren.</p></div>
+          </div>
+
+          <div className="mt-6 flex justify-end">
+            <ActionButton onClick={onClose}>Verstanden</ActionButton>
+          </div>
+        </div>
+      </div>
+    </ModalFrame>
+  );
+}
+
 export function OfflineModal({
   summary,
   onClose,
@@ -124,7 +219,7 @@ export function OfflineModal({
         <span className="grid size-11 place-items-center rounded-2xl bg-blue-500/10 text-blue-600">
           <Icon name="clock" size={21} />
         </span>
-        <h2 className="mt-5 text-2xl font-semibold tracking-[-0.03em] text-white">Willkommen zurück</h2>
+        <h2 className="mt-5 text-2xl font-semibold tracking-[-0.03em] text-slate-950">Willkommen zurück</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">
           Dein Unternehmen war {summary.days} Spieltage aktiv. Produktion, Forschung und Markt wurden vollständig weitergerechnet.
         </p>
@@ -142,7 +237,7 @@ export function OfflineModal({
           ))}
         </div>
         {summary.completedResearch.length ? (
-          <div className="mt-4 rounded-xl bg-indigo-50/[0.055] p-3 text-xs text-indigo-700">
+          <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-700">
             Forschung abgeschlossen: {summary.completedResearch.join(", ")}
           </div>
         ) : null}
@@ -170,7 +265,7 @@ export function SettingsModal({
     <ModalFrame onClose={onClose} width="max-w-lg">
       <div className="border-b border-slate-200 p-6 sm:px-8">
         <span className="grid size-10 place-items-center rounded-xl bg-slate-50 text-slate-700"><Icon name="settings" size={19} /></span>
-        <h2 className="mt-4 text-xl font-semibold text-white">Spielstand & Einstellungen</h2>
+        <h2 className="mt-4 text-xl font-semibold text-slate-950">Spielstand & Einstellungen</h2>
         <p className="mt-1 text-xs text-slate-500">Deine Daten verlassen diesen Browser nicht.</p>
       </div>
       <div className="space-y-4 p-6 sm:px-8">
@@ -192,7 +287,7 @@ export function SettingsModal({
             onChange={(event) => setImportValue(event.target.value)}
             rows={3}
             placeholder="{ ... }"
-            className="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 font-mono text-[0.68rem] text-slate-700 outline-none placeholder:text-slate-700 focus:border-blue-300/40"
+            className="mt-3 w-full resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[0.68rem] text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
           />
           <ActionButton
             className="mt-2"

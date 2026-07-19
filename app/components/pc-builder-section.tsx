@@ -10,7 +10,6 @@ import {
 import {
   PC_PART_CATEGORIES,
   PC_RESEARCH_ATTRIBUTE_IDS,
-  createBestCompatibleConfiguration,
   createSegmentConfiguration,
   evaluatePcBuild,
   formatPcAttributeValue,
@@ -274,14 +273,6 @@ export function PcBuilderSection({
     });
   }
 
-  function useBestResearchedConfiguration() {
-    const bestConfiguration = createBestCompatibleConfiguration(state.componentResearch);
-    const bestEvaluation = evaluatePcBuild(bestConfiguration);
-    setConfiguration(bestConfiguration);
-    setMarketSegment("performance");
-    setPrice(String(bestEvaluation.suggestedPrice));
-  }
-
   function applyMarketSegment(segment: PcMarketSegment) {
     const nextConfiguration = createSegmentConfiguration(state.componentResearch, segment);
     const nextEvaluation = evaluatePcBuild(nextConfiguration);
@@ -319,18 +310,7 @@ export function PcBuilderSection({
           <PanelHeader
             eyebrow="01 · Konfiguration"
             title="Modell entwerfen"
-            description="Komponenten bestimmen Leistung, Marktwert und Kosten. Alle Modelle konkurrieren im selben PC-Markt."
-            action={
-              <ActionButton
-                size="sm"
-                variant="secondary"
-                onClick={useBestResearchedConfiguration}
-                leadingIcon={<Icon name="sparkles" size={15} />}
-                title="Bestes kompatibles Setup aus allen erforschten Werten wählen"
-              >
-                Auto-Build
-              </ActionButton>
-            }
+            description="Wähle Low-End, Mid-Range oder High-End für einen passenden automatischen Bauplan und passe die Komponenten danach bei Bedarf an."
           />
 
           <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">

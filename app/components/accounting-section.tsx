@@ -5,8 +5,10 @@ import { DAYS_PER_MONTH, DAYS_PER_YEAR, GAME_START_YEAR } from "@/app/game/data"
 import {
   formatCompactMoney,
   getAnnualInterestRate,
+  getDailyDebtRepayment,
   getDailyMarketingCost,
   getDailyPayroll,
+  getEstimatedMonthlyPortfolioIncome,
   getNetWorth,
   getPortfolioValue,
   getProductEconomics,
@@ -14,7 +16,7 @@ import {
 import type { GameState, HistoryPoint } from "@/app/game/types";
 import { MetricCard, Panel, PanelHeader, SectionTitle, StatusBadge } from "./game-ui";
 import { Icon } from "./icons";
-import { TrendChart } from "./trend-chart";
+import { GroupedBarChart, TrendChart } from "./trend-chart";
 
 const money = new Intl.NumberFormat("de-DE", {
   style: "currency",
@@ -76,14 +78,38 @@ export function AccountingSection({ state }: { state: GameState }) {
   }, [monthly]);
   const chart = monthly.slice(-12);
   const developmentChart = monthly;
-  const chartMax = Math.max(1, ...chart.flatMap((item) => [item.revenue, item.expenses]));
-  const inventoryValue = state.products.reduce((sum, product) => {
+  const productRevenueMonth = state.products.reduce((sum, product) => {
     const economics = getProductEconomics(state, product);
-    return sum + product.inventory * (economics?.unitCost ?? 0);
+    return sum + (economics?.revenue ?? 0) * DAYS_PER_MONTH;
+  }, 0);
+  const productionMonth = state.products.reduce((sum, product) => {
+    const economics = getProductEconomics(state, product);
+    return sum + (economics?.productionCost ?? 0) * DAYS_PER_MONTH;
   }, 0);
   const payrollMonth = getDailyPayroll(state) * DAYS_PER_MONTH;
   const marketingMonth = getDailyMarketingCost(state) * DAYS_PER_MONTH;
   const interestMonth = (state.debt * getAnnualInterestRate(state)) / 12;
+  const debtPrincipalMonth = Math.min(
+    state.debt,
+    getDailyDebtRepayment(state) * DAYS_PER_MONTH,
+  );
+  const debtServiceMonth = interestMonth + debtPrincipalMonth;
+  const knownOperatingExpenses = productionMonth + payrollMonth + marketingMonth + interestMonth;
+  const operatingRevenueMonth = Math.max(
+    productRevenueMonth,
+    state.lastDayRevenue * DAYS_PER_MONTH,
+  );
+  const operatingExpensesMonth = Math.max(
+    knownOperatingExpenses,
+    state.lastDayExpenses * DAYS_PER_MONTH,
+  );
+  const consolidatedRevenueMonth = Math.max(0, operatingRevenueMonth - productRevenueMonth);
+  const consolidatedExpensesMonth = Math.max(0, operatingExpensesMonth - knownOperatingExpenses);
+  const portfolioIncomeMonth = getEstimatedMonthlyPortfolioIncome(state);
+  const totalIncomeMonth = operatingRevenueMonth + portfolioIncomeMonth;
+  const totalExpensesMonth = operatingExpensesMonth;
+  const totalMonthlyOutflow = totalExpensesMonth + debtPrincipalMonth;
+  const projectedMonthlyProfit = totalIncomeMonth - totalMonthlyOutflow;
 
   return (
     <div className="space-y-5">
@@ -101,36 +127,83 @@ export function AccountingSection({ state }: { state: GameState }) {
         <MetricCard label="Nettovermögen" value={formatCompactMoney(getNetWorth(state))} detail={`davon ${formatCompactMoney(getPortfolioValue(state))} Wertpapiere`} icon={<Icon name="building" size={17} />} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+      <div className="grid gap-5 xl:grid-cols-2">
         <Panel>
           <PanelHeader title="Monatsentwicklung" description="Umsatz und Aufwand der letzten zwölf Monate inklusive laufender Periode." />
-          <div className="mt-6 flex h-52 items-end gap-2 border-b border-slate-200 pb-1">
-            {chart.map((item, index) => (
-              <div key={`${item.day}-${index}`} className="flex min-w-0 flex-1 flex-col items-center gap-1" title={`${monthLabel(item.day)}: ${money.format(item.revenue)} Umsatz`}>
-                <div className="flex h-40 w-full items-end justify-center gap-0.5">
-                  <span className="w-2/5 rounded-t bg-blue-500" style={{ height: `${Math.max(2, (item.revenue / chartMax) * 100)}%` }} />
-                  <span className="w-2/5 rounded-t bg-slate-400" style={{ height: `${Math.max(2, (item.expenses / chartMax) * 100)}%` }} />
-                </div>
-                <span className="truncate text-[0.58rem] text-slate-500">{monthLabel(item.day)}</span>
-              </div>
-            ))}
+          <div className="mt-5">
+            <GroupedBarChart
+              ariaLabel="Vergleich von Umsatz und Aufwand der letzten zwölf Monate"
+              labels={chart.map((item) => monthLabel(item.day))}
+              series={[
+                { label: "Umsatz", color: "#2563eb", values: chart.map((item) => item.revenue), formatValue: formatCompactMoney },
+                { label: "Aufwand", color: "#94a3b8", values: chart.map((item) => item.expenses), formatValue: formatCompactMoney },
+              ]}
+            />
           </div>
-          <div className="mt-3 flex gap-5 text-xs text-slate-600"><span><i className="mr-2 inline-block size-2 rounded-sm bg-blue-500" />Umsatz</span><span><i className="mr-2 inline-block size-2 rounded-sm bg-slate-400" />Aufwand</span></div>
         </Panel>
 
-        <Panel>
-          <PanelHeader title="Monatliche Fixkosten" description="Hochrechnung bei aktueller Aufstellung." />
-          <dl className="mt-5 divide-y divide-slate-200 text-sm">
-            {[
-              ["Personal", payrollMonth],
-              ["Marketing", marketingMonth],
-              ["Kreditzinsen", interestMonth],
-              ["Lagerbestand", inventoryValue],
-              ["Verbindlichkeiten", state.debt],
-            ].map(([label, value]) => (
-              <div key={String(label)} className="flex justify-between gap-4 py-3"><dt className="text-slate-600">{label}</dt><dd className="font-mono font-medium text-slate-900 tabular-nums">{money.format(Number(value))}</dd></div>
-            ))}
-          </dl>
+        <Panel padding="none" className="overflow-hidden">
+          <div className="p-4 sm:p-5">
+            <PanelHeader
+              title="Monatliche Abrechnung"
+              description="Hochrechnung aus dem aktuellen Tagesgeschäft und den derzeitigen Verträgen."
+              action={
+                <StatusBadge tone={projectedMonthlyProfit >= 0 ? "success" : "danger"}>
+                  {projectedMonthlyProfit >= 0 ? "Gewinn" : "Verlust"}
+                </StatusBadge>
+              }
+            />
+          </div>
+          <div className="overflow-x-auto border-t border-slate-200">
+            <table className="w-full min-w-[34rem] text-left text-xs">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  <th className="px-4 py-3 font-semibold tracking-wide uppercase">Position</th>
+                  <th className="px-4 py-3 text-right font-semibold tracking-wide uppercase">Einnahmen</th>
+                  <th className="px-4 py-3 text-right font-semibold tracking-wide uppercase">Ausgaben</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {[
+                  { label: "Produktverkäufe", income: productRevenueMonth, expense: 0 },
+                  { label: "Umsatz übernommener Unternehmen", income: consolidatedRevenueMonth, expense: 0 },
+                  { label: "Dividenden aus Beteiligungen", income: portfolioIncomeMonth, expense: 0 },
+                  { label: "Produktion & Material", income: 0, expense: productionMonth },
+                  { label: "Personal", income: 0, expense: payrollMonth },
+                  { label: "Marketing & Kampagnen", income: 0, expense: marketingMonth },
+                  {
+                    label: "Kreditrate",
+                    income: 0,
+                    expense: debtServiceMonth,
+                  },
+                  { label: "Kosten übernommener Unternehmen", income: 0, expense: consolidatedExpensesMonth },
+                ].map((entry) => (
+                  <tr key={entry.label} className="hover:bg-slate-50/70">
+                    <td className="px-4 py-2.5 text-slate-700">{entry.label}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-emerald-700 tabular-nums">
+                      {entry.income > 0 ? money.format(entry.income) : "–"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-rose-700 tabular-nums">
+                      {entry.expense > 0 ? money.format(entry.expense) : "–"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t-2 border-slate-300 bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 font-semibold text-slate-900">Summe Zahlungsströme</th>
+                  <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-700 tabular-nums">{money.format(totalIncomeMonth)}</td>
+                  <td className="px-4 py-3 text-right font-mono font-semibold text-rose-700 tabular-nums">{money.format(totalMonthlyOutflow)}</td>
+                </tr>
+                <tr className={projectedMonthlyProfit >= 0 ? "bg-emerald-50" : "bg-rose-50"}>
+                  <th className="px-4 py-3 font-semibold text-slate-950">Voraussichtlicher Monatsgewinn</th>
+                  <td colSpan={2} className={`px-4 py-3 text-right font-mono text-base font-bold tabular-nums ${projectedMonthlyProfit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                    {money.format(projectedMonthlyProfit)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </Panel>
       </div>
 
@@ -205,15 +278,6 @@ export function AccountingSection({ state }: { state: GameState }) {
         </div>
       </Panel>
 
-      <Panel padding="none" className="overflow-hidden">
-        <div className="p-4 sm:p-5"><PanelHeader title="Produktrechnung" description="Verkauf, Bestand und geschätzter Deckungsbeitrag je Produkt." /></div>
-        <div className="overflow-x-auto border-t border-slate-200">
-          <table className="w-full min-w-[880px] text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500"><tr>{["Produkt", "Status", "Preis", "Stückkosten", "Stückmarge", "Absatz/Tag", "Produktion/Tag", "Bestand"].map((label) => <th key={label} className="px-4 py-3 font-semibold uppercase tracking-wide">{label}</th>)}</tr></thead>
-            <tbody className="divide-y divide-slate-200">{state.products.map((product) => { const economics = getProductEconomics(state, product); return <tr key={product.id} className="hover:bg-slate-50"><td className="px-4 py-3"><p className="font-semibold text-slate-900">{product.name}</p><p className="mt-0.5 text-slate-500">Technikfit {Math.round((economics?.modernity ?? 0) * 100)} %</p></td><td className="px-4 py-3"><StatusBadge tone={product.active ? "success" : "neutral"}>{product.active ? "Aktiv" : "Eingestellt"}</StatusBadge></td><td className="px-4 py-3 font-mono text-slate-700">{money.format(product.price)}</td><td className="px-4 py-3 font-mono text-slate-700">{money.format(economics?.unitCost ?? 0)}</td><td className="px-4 py-3 font-mono text-emerald-700">{money.format(economics?.unitMargin ?? 0)}</td><td className="px-4 py-3 font-mono text-slate-700">{product.lastSales.toFixed(1)}</td><td className="px-4 py-3 font-mono text-slate-700">{product.lastProduction.toFixed(1)}</td><td className="px-4 py-3 font-mono text-slate-700">{product.inventory.toFixed(1)}</td></tr>; })}</tbody>
-          </table>
-        </div>
-      </Panel>
     </div>
   );
 }
