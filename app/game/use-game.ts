@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createInitialState, GAME_VERSION, STORAGE_KEY, TECH_TREE } from "./data";
 import {
   LOAN_TERM_DAYS,
+  MARKETING_FOCUSES,
   compactCompanyHistory,
   gameReducer,
   simulateDays,
@@ -21,9 +22,13 @@ import {
   normalizeActiveGameSpeed,
   normalizeGameSpeed,
 } from "./time";
-import type { GameState, SimulationSummary } from "./types";
+import type { EnterpriseContractState, GameState, SimulationSummary } from "./types";
 
 type SaveStatus = "saved" | "saving" | "error";
+
+function safeNumber(value: unknown, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
 
 function withoutTransientProductMetrics<T extends object>(product: T): T {
   const clean = { ...product } as T & Record<string, unknown>;
@@ -32,8 +37,36 @@ function withoutTransientProductMetrics<T extends object>(product: T): T {
   delete clean.lastDemand;
   delete clean.lastProduction;
   delete clean.lastSales;
+  delete clean.lastContractSales;
   delete clean.lastLostSales;
+  delete clean.lastReturns;
+  delete clean.salesChannel;
   return clean;
+}
+
+function migrateEnterpriseContract(value: unknown): EnterpriseContractState | null {
+  if (!value || typeof value !== "object") return null;
+  const contract = { ...value } as Record<string, unknown>;
+  const totalDays = Math.max(1, Math.floor(safeNumber(contract.totalDays, safeNumber(contract.durationDays, 1))));
+  const legacyDailyUnits = Math.max(0, safeNumber(contract.unitsPerDay));
+  const totalUnits = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.max(1, safeNumber(contract.totalUnits, legacyDailyUnits * totalDays || 1)),
+  );
+  delete contract.unitsPerDay;
+  delete contract.lastFulfilled;
+  delete contract.durationDays;
+  delete contract.previousSalesChannel;
+  return {
+    ...contract,
+    totalDays,
+    daysRemaining: Math.max(1, Math.floor(safeNumber(contract.daysRemaining, totalDays))),
+    totalUnits,
+    fulfilledUnits: Math.min(totalUnits, Math.max(0, safeNumber(contract.fulfilledUnits))),
+    unitPrice: Math.max(0, safeNumber(contract.unitPrice)),
+    minimumQuality: Math.max(0, safeNumber(contract.minimumQuality)),
+    lastDelivery: Math.max(0, safeNumber(contract.lastDelivery)),
+  } as unknown as EnterpriseContractState;
 }
 
 export function mergeLoadedState(input: unknown): GameState | null {
@@ -43,6 +76,19 @@ export function mergeLoadedState(input: unknown): GameState | null {
   delete inputRecord.pendingEvent;
   delete inputRecord.lastEventDay;
   delete inputRecord.eventSeed;
+  for (const obsolete of ["loanRateAdjustment", "staffingTargets", "autoStaffing", "monthlyPlan", "dividendPolicy", "lastDividendPaid", "investorConfidence", "capitalGuidance", "guidanceRevenueTarget"]) {
+    delete inputRecord[obsolete];
+  }
+  const legacyContract = inputRecord.enterpriseContract;
+  const rawContracts = Array.isArray(inputRecord.enterpriseContracts)
+    ? inputRecord.enterpriseContracts
+    : legacyContract
+      ? [legacyContract]
+      : [];
+  inputRecord.enterpriseContracts = rawContracts
+    .map(migrateEnterpriseContract)
+    .filter((contract): contract is EnterpriseContractState => contract !== null);
+  delete inputRecord.enterpriseContract;
   const parsed = inputRecord as Partial<GameState>;
   const saveVersion = parsed.version ?? -1;
   if (
@@ -105,14 +151,22 @@ export function mergeLoadedState(input: unknown): GameState | null {
     : savedSpeed;
   const sectionMap: Partial<Record<GameState["selectedSection"], GameState["selectedSection"]>> = {
     products: "builder",
-    production: "company",
-    people: "company",
-    marketing: "marketing",
-    finance: "market",
-    stocks: "market",
-    deals: "market",
   };
   const selectedSection = sectionMap[parsed.selectedSection ?? "dashboard"] ?? parsed.selectedSection ?? "dashboard";
+  const latestValidHistory = Array.isArray(parsed.history)
+    ? [...parsed.history].reverse().find((point) =>
+        Number.isFinite(point.cash) &&
+        Number.isFinite(point.valuation) &&
+        point.valuation < Number.MAX_SAFE_INTEGER,
+      )
+    : undefined;
+  const recoveredCash = safeNumber(latestValidHistory?.cash, base.cash);
+  const recoveredValuation = Math.max(250_000, safeNumber(latestValidHistory?.valuation, base.valuation));
+  const totalShares = Math.max(1, Math.floor(safeNumber(parsed.totalShares, base.totalShares)));
+  const storedValuation = safeNumber(parsed.valuation, recoveredValuation);
+  const valuation = storedValuation >= Number.MAX_SAFE_INTEGER
+    ? recoveredValuation
+    : Math.max(250_000, storedValuation);
 
   return {
     ...base,
@@ -122,15 +176,51 @@ export function mergeLoadedState(input: unknown): GameState | null {
     takeoverDefenseDays: 0,
     speed,
     previousSpeed,
+    cash: safeNumber(parsed.cash, recoveredCash),
+    debt: Math.max(0, safeNumber(parsed.debt)),
+    lifetimeRevenue: Math.max(0, safeNumber(parsed.lifetimeRevenue)),
+    lifetimeProfit: safeNumber(parsed.lifetimeProfit),
+    monthlyRevenue: Math.max(0, safeNumber(parsed.monthlyRevenue)),
+    monthlyProductRevenue: Math.max(0, safeNumber(parsed.monthlyProductRevenue, safeNumber(parsed.monthlyRevenue))),
+    monthlyContractRevenue: Math.max(0, safeNumber(parsed.monthlyContractRevenue)),
+    monthlyExpenses: Math.max(0, safeNumber(parsed.monthlyExpenses)),
+    lastMonthRevenue: Math.max(0, safeNumber(parsed.lastMonthRevenue)),
+    lastMonthProductRevenue: Math.max(0, safeNumber(parsed.lastMonthProductRevenue, safeNumber(parsed.lastMonthRevenue))),
+    lastMonthContractRevenue: Math.max(0, safeNumber(parsed.lastMonthContractRevenue)),
+    lastMonthExpenses: Math.max(0, safeNumber(parsed.lastMonthExpenses)),
+    lastDayRevenue: Math.max(0, safeNumber(parsed.lastDayRevenue)),
+    lastDayProductRevenue: Math.max(0, safeNumber(parsed.lastDayProductRevenue, safeNumber(parsed.lastDayRevenue))),
+    lastDayContractRevenue: Math.max(0, safeNumber(parsed.lastDayContractRevenue)),
+    lastDayExpenses: Math.max(0, safeNumber(parsed.lastDayExpenses)),
+    founderShares: Math.min(totalShares, Math.max(0, Math.floor(safeNumber(parsed.founderShares, base.founderShares)))),
+    totalShares,
+    valuation,
+    sharePrice: valuation / totalShares,
     dailyDebtRepayment:
-      typeof parsed.dailyDebtRepayment === "number"
-        ? Math.max(0, parsed.dailyDebtRepayment)
-        : Math.max(0, parsed.debt ?? 0) / LOAN_TERM_DAYS,
+      Number.isFinite(parsed.dailyDebtRepayment)
+        ? Math.max(0, safeNumber(parsed.dailyDebtRepayment))
+        : Math.max(0, safeNumber(parsed.debt)) / LOAN_TERM_DAYS,
+    difficulty: parsed.difficulty ?? base.difficulty,
     employees: { ...base.employees, ...(parsed.employees ?? {}) },
     departmentLevels: {
       ...base.departmentLevels,
       ...(parsed.departmentLevels ?? {}),
     },
+    productGenerations: {
+      ...base.productGenerations,
+      ...(parsed.productGenerations ?? {}),
+    },
+    factoryCondition:
+      Math.min(100, Math.max(20, safeNumber(parsed.factoryCondition, 100))),
+    maintenanceBudget:
+      Math.max(0, safeNumber(parsed.maintenanceBudget, base.maintenanceBudget)),
+    qualityFocus: Math.min(1.3, Math.max(0.7, safeNumber(parsed.qualityFocus, base.qualityFocus))),
+    marketingBudget: Math.max(0, safeNumber(parsed.marketingBudget, base.marketingBudget)),
+    marketingFocus: parsed.marketingFocus && MARKETING_FOCUSES[parsed.marketingFocus] ? parsed.marketingFocus : base.marketingFocus,
+    marketingTarget: parsed.marketingTarget && ["all", "budget", "mainstream", "performance"].includes(parsed.marketingTarget) ? parsed.marketingTarget : base.marketingTarget,
+    enterpriseContracts: Array.isArray(parsed.enterpriseContracts)
+      ? parsed.enterpriseContracts.map(migrateEnterpriseContract).filter((contract): contract is EnterpriseContractState => contract !== null)
+      : [],
     products: Array.isArray(parsed.products)
       ? parsed.products.filter((product) => product.active !== false).map((product) => ({
           ...withoutTransientProductMetrics(product),
@@ -144,38 +234,41 @@ export function mergeLoadedState(input: unknown): GameState | null {
           lastDemand: 0,
           lastProduction: 0,
           lastSales: 0,
+          lastContractSales: 0,
+          lastReturns: 0,
+          generation:
+            typeof product.generation === "number" ? Math.max(1, product.generation) : 1,
           configuration: product.configuration
             ? normalizePcConfiguration(product.configuration)
             : undefined,
           marketSegment: product.marketSegment ?? (product.audience === "gaming" || product.audience === "creator" ? "performance" : "budget"),
         }))
       : base.products,
+    history: compactCompanyHistory([base.history[0], ...(Array.isArray(parsed.history) ? parsed.history : [])].map((point) => ({
+      ...point,
+      day: Math.max(0, Math.floor(safeNumber(point.day))),
+      revenue: Math.max(0, safeNumber(point.revenue)),
+      productRevenue: Math.max(0, safeNumber(point.productRevenue, safeNumber(point.revenue))),
+      contractRevenue: Math.max(0, safeNumber(point.contractRevenue)),
+      expenses: Math.max(0, safeNumber(point.expenses)),
+      profit: safeNumber(point.profit),
+      valuation: safeNumber(point.valuation, base.valuation) >= Number.MAX_SAFE_INTEGER
+        ? base.valuation
+        : Math.max(250_000, safeNumber(point.valuation, base.valuation)),
+      cash: safeNumber(point.cash),
+      debt: Math.max(0, safeNumber(point.debt)),
+      marketShare: Math.min(100, Math.max(0, safeNumber(point.marketShare, base.marketShare))),
+      employees: Math.max(0, Math.floor(safeNumber(point.employees))),
+      brand: Math.min(100, Math.max(0, safeNumber(point.brand, base.brand))),
+    }))),
     competitors: mergedCompetitors,
     unlockedTech,
     unlockedParts: [...new Set([...STARTER_PART_IDS, ...unlockedParts])],
     componentResearch,
     currentResearch,
     autoResearch: parsed.autoResearch === true,
+    autoAcceptContracts: parsed.autoAcceptContracts === true,
     selectedSection,
-    history: Array.isArray(parsed.history)
-      ? compactCompanyHistory([base.history[0], ...parsed.history.map((point) => ({
-          ...point,
-          debt: typeof point.debt === "number" ? point.debt : 0,
-          marketShare:
-            typeof point.marketShare === "number"
-              ? point.marketShare
-              : parsed.marketShare ?? base.marketShare,
-          employees:
-            typeof point.employees === "number"
-              ? point.employees
-              : Object.values(parsed.employees ?? base.employees).reduce(
-                  (sum, amount) => sum + amount,
-                  0,
-                ),
-          brand:
-            typeof point.brand === "number" ? point.brand : parsed.brand ?? base.brand,
-        }))])
-      : base.history,
     news: Array.isArray(parsed.news) ? parsed.news : base.news,
     achievements: Array.isArray(parsed.achievements)
       ? parsed.achievements
@@ -202,6 +295,8 @@ function serializeState(state: GameState, now = Date.now()) {
       active: true,
       qualityBonus: product.qualityBonus,
       productionTarget: product.productionTarget,
+      generation: product.generation,
+      predecessorId: product.predecessorId,
       configuration: product.configuration,
       audience: product.audience,
       marketSegment: product.marketSegment,

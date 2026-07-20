@@ -4,6 +4,7 @@ import { useMemo, useState, type Dispatch } from "react";
 import {
   formatCompactMoney,
   formatMoney,
+  getCompetitorProductOffers,
   getProductEconomics,
   PC_MARKET_SEGMENTS,
 } from "@/app/game/engine";
@@ -113,6 +114,10 @@ function ProductRow({
 }) {
   const economics = getProductEconomics(state, product);
   if (!economics) return null;
+  const predecessor = product.predecessorId
+    ? state.products.find((candidate) => candidate.id === product.predecessorId)
+    : undefined;
+  const contractLocked = state.enterpriseContracts.some((contract) => contract.productId === product.id);
 
   const lowerPrice = Math.max(economics.unitCost * 1.05, product.price * 0.95);
   const marketStatus = economics.relativePerformance < -0.9
@@ -140,7 +145,7 @@ function ProductRow({
             : economics.blueprint.tagline}
         </p>
         <p className="mt-1 pl-4 text-[0.62rem] text-slate-500">
-          {PC_MARKET_SEGMENTS[economics.marketSegment].name} · Rang {economics.marketRank} · Marktwert ca. {formatMoney(economics.fairPrice)}
+          Generation {product.generation}{predecessor ? ` · Nachfolger von ${predecessor.name}` : ""} · {PC_MARKET_SEGMENTS[economics.marketSegment].name} · Rang {economics.marketRank} · Marktwert ca. {formatMoney(economics.fairPrice)}
         </p>
         <p className="mt-0.5 pl-4 text-[0.62rem] text-slate-500">
           Technik vs. Marktspitze {economics.relativePerformance >= 0 ? "+" : ""}{economics.relativePerformance.toFixed(2)} · Segment {integer.format(economics.segmentMarketSize)} Geräte/Tag
@@ -157,8 +162,8 @@ function ProductRow({
           <p className="mt-1 font-mono text-xs text-slate-700">{economics.demand.toFixed(1)}</p>
         </div>
         <div>
-          <p className="text-[0.58rem] tracking-wide text-slate-600 uppercase">Absatz / Tag</p>
-          <p className="mt-1 font-mono text-xs text-slate-700">{product.lastSales.toFixed(1)}</p>
+          <p className="text-[0.58rem] tracking-wide text-slate-600 uppercase">Absatz / Retouren</p>
+          <p className="mt-1 font-mono text-xs text-slate-700">{product.lastSales.toFixed(1)} / {product.lastReturns.toFixed(1)}</p>
         </div>
       </div>
 
@@ -187,9 +192,11 @@ function ProductRow({
         <ActionButton
           size="sm"
           variant="ghost"
+          disabled={contractLocked}
+          title={contractLocked ? "Während eines Firmenkundenvertrags nicht möglich" : undefined}
           onClick={() => dispatch({ type: "RETIRE_PRODUCT", productId: product.id })}
         >
-          Stilllegen
+          {contractLocked ? "Im Vertrag" : "Stilllegen"}
         </ActionButton>
       </div>
     </div>
@@ -254,6 +261,15 @@ export function PcBuilderSection({
     state.cash >= evaluation.developmentCost;
   const activeProducts = state.products.filter((product) => product.active);
   const powerSupply = getPcComponentSummary(configuration, "psu");
+  const competitorOffers = getCompetitorProductOffers(state).filter(
+    (offer) => offer.segment === marketSegment,
+  );
+  const strongestCompetitor = competitorOffers.slice().sort((left, right) => right.technology - left.technology)[0];
+  const ownTechnology = evaluation.tier + Math.log2(1 + Math.max(0, evaluation.performance)) / 17;
+  const technologyGap = ownTechnology - (strongestCompetitor?.technology ?? ownTechnology);
+  const averageCompetitorPrice = competitorOffers.length
+    ? competitorOffers.reduce((sum, offer) => sum + offer.price, 0) / competitorOffers.length
+    : PC_MARKET_SEGMENTS[marketSegment].basePrice;
 
   function setAttributeLevel(attribute: PcResearchAttribute, level: number) {
     const maximum = state.componentResearch[attribute];
@@ -453,6 +469,21 @@ export function PcBuilderSection({
             title="Bauplan prüfen"
             description="Alle Werte aktualisieren sich direkt mit deiner Auswahl."
           />
+
+          <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[0.62rem] font-semibold tracking-wide text-blue-800 uppercase">Marktvergleich</p>
+              <StatusBadge tone={numericPrice <= averageCompetitorPrice ? "success" : "warning"}>
+                {PC_MARKET_SEGMENTS[marketSegment].name}
+              </StatusBadge>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+              <div><p className="text-slate-500">Ø Konkurrenzpreis</p><p className="mt-1 font-mono font-semibold text-slate-900">{formatMoney(averageCompetitorPrice)}</p></div>
+              <div><p className="text-slate-500">Technikspitze</p><p className="mt-1 truncate font-semibold text-slate-900">{strongestCompetitor?.name ?? "Kein Angebot"}</p></div>
+              <div><p className="text-slate-500">Preisabweichung</p><p className={`mt-1 font-mono font-semibold ${numericPrice <= averageCompetitorPrice ? "text-emerald-700" : "text-amber-700"}`}>{Number.isFinite(numericPrice) ? `${numericPrice >= averageCompetitorPrice ? "+" : ""}${((numericPrice / Math.max(1, averageCompetitorPrice) - 1) * 100).toFixed(0)} %` : "–"}</p></div>
+              <div><p className="text-slate-500">Technikabstand</p><p className={`mt-1 font-mono font-semibold ${technologyGap >= 0 ? "text-emerald-700" : "text-amber-700"}`}>{technologyGap >= 0 ? "+" : ""}{technologyGap.toFixed(2)}</p></div>
+            </div>
+          </div>
 
           <div className="mt-5 grid grid-cols-2 gap-2">
             {[

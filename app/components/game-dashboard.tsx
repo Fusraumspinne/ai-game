@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { DAYS_PER_MONTH, DAYS_PER_YEAR, GAME_START_YEAR } from "@/app/game/data";
-import { getDailyDebtRepayment } from "@/app/game/engine";
+import { getMonthlyFinancialProjection } from "@/app/game/engine";
 import { useGame } from "@/app/game/use-game";
 import type { GameSection } from "@/app/game/types";
 import { GameShell, type GameSpeed } from "./game-shell";
@@ -14,8 +14,13 @@ import { PcBuilderSection } from "./pc-builder-section";
 import { AccountingSection } from "./accounting-section";
 import {
   SimpleCompanySection,
+  SimpleCompetitionSection,
+  SimpleDealsSection,
+  SimpleFinanceSection,
   SimpleMarketingSection,
-  SimpleMarketSection,
+  SimplePeopleSection,
+  SimpleProductionSection,
+  SimpleStocksSection,
 } from "./simple-company-market";
 import {
   OfflineModal,
@@ -88,17 +93,7 @@ export default function GameDashboard() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const ownership = (state.founderShares / state.totalShares) * 100;
-  const displayedRevenue = state.lastMonthRevenue || state.monthlyRevenue;
-  const displayedExpenses = state.lastMonthExpenses || state.monthlyExpenses;
-  const monthlyDebtRepayment = Math.min(
-    state.debt,
-    getDailyDebtRepayment(state) * DAYS_PER_MONTH,
-  );
-  const monthlyProfit =
-    displayedRevenue -
-    displayedExpenses +
-    (state.lastMonthRevenue > 0 ? state.lastMonthInvestmentIncome : 0) -
-    monthlyDebtRepayment;
+  const monthlyProfit = getMonthlyFinancialProjection(state).profit;
   const currentSection = state.selectedSection;
 
   const content = useMemo(() => {
@@ -112,10 +107,20 @@ export default function GameDashboard() {
         return <ComponentResearchSection {...common} />;
       case "company":
         return <SimpleCompanySection {...common} />;
+      case "production":
+        return <SimpleProductionSection {...common} />;
+      case "people":
+        return <SimplePeopleSection {...common} />;
       case "marketing":
         return <SimpleMarketingSection {...common} />;
       case "market":
-        return <SimpleMarketSection {...common} />;
+        return <SimpleCompetitionSection {...common} />;
+      case "finance":
+        return <SimpleFinanceSection {...common} />;
+      case "stocks":
+        return <SimpleStocksSection {...common} />;
+      case "deals":
+        return <SimpleDealsSection {...common} />;
       default:
         return (
           <SimpleDashboardSection

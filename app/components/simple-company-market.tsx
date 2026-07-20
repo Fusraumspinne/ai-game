@@ -17,13 +17,19 @@ import {
   getAutomationRequirement,
   getBuybackQuote,
   getCompanyControl,
+  getCompetitorProductOffers,
+  getContractDailyTarget,
   getCreditLimit,
   getDailyDebtRepayment,
   getDailyMarketingCost,
+  getDailyPcMarketSize,
   getDailyPayroll,
   getDailySalesCapacity,
   getDepartmentUpgradeCost,
   getEmployeeCount,
+  getEnterpriseContractOffers,
+  getEnterpriseContractCapacity,
+  getEnterpriseContractUnitPrice,
   getFactoryCapacity,
   getFactoryUpgradeCost,
   getFireCost,
@@ -41,17 +47,24 @@ import {
   getResearchRate,
   getShareIssueQuote,
   getStockTradeQuote,
+  getStrategicStakeLevel,
+  getSubsidiaryExitQuote,
   getWarehouseCapacity,
   getWarehouseUpgradeCost,
   getWorkforcePlan,
+  isEnterpriseContractOfferUsed,
   LOAN_TERM_DAYS,
+  MARKETING_FOCUSES,
+  PC_MARKET_SEGMENTS,
 } from "../game/engine";
 import type {
   CompetitorState,
   DepartmentId,
   GameAction,
   GameState,
+  MarketingFocus,
   MarketingStrategy,
+  MarketingTarget,
 } from "../game/types";
 import {
   ActionButton,
@@ -69,24 +82,6 @@ interface SimpleSectionProps {
   state: GameState;
   dispatch: Dispatch<GameAction>;
 }
-
-type CompanyTab = "team" | "production";
-type MarketTab = "finance" | "stocks" | "deals";
-
-const companyTabs: Array<{
-  id: CompanyTab;
-  label: string;
-  icon: IconName;
-}> = [
-  { id: "production", label: "Fabrik & Lager", icon: "production" },
-  { id: "team", label: "Personal", icon: "people" },
-];
-
-const marketTabs: Array<{ id: MarketTab; label: string; icon: IconName }> = [
-  { id: "finance", label: "Finanzierung", icon: "finance" },
-  { id: "stocks", label: "Aktien", icon: "stocks" },
-  { id: "deals", label: "Übernahmen", icon: "deals" },
-];
 
 const departmentIcons: Record<DepartmentId, IconName> = {
   production: "production",
@@ -128,48 +123,6 @@ function Metric({
       {detail ? (
         <p className="mt-1 truncate text-[0.66rem] text-slate-500">{detail}</p>
       ) : null}
-    </div>
-  );
-}
-
-function Tabs<T extends string>({
-  items,
-  value,
-  onChange,
-  label,
-}: {
-  items: Array<{ id: T; label: string; icon: IconName }>;
-  value: T;
-  onChange: (value: T) => void;
-  label: string;
-}) {
-  return (
-    <div
-      className="grid gap-2 bg-transparent sm:flex"
-      style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
-      role="tablist"
-      aria-label={label}
-    >
-      {items.map((item) => {
-        const active = item.id === value;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(item.id)}
-            className={`inline-flex min-w-0 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-xs font-semibold tracking-[0.03em] transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:outline-none sm:min-w-28 ${
-              active
-                ? "border-[#101a31] bg-[#101a31] text-white shadow-sm"
-                : "border-[#dbe3ee] bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800"
-            }`}
-          >
-            <Icon name={item.icon} size={14} />
-            <span className="truncate">{item.label}</span>
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -303,7 +256,7 @@ function TeamPanel({ state, dispatch }: SimpleSectionProps) {
                 </div>
               </div>
 
-              <div className="min-w-24 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+              <div className="min-w-32 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
                   <p className="font-mono text-sm font-semibold text-slate-900">
                     {count.toLocaleString("de-DE")}
                   </p>
@@ -352,7 +305,11 @@ function TeamPanel({ state, dispatch }: SimpleSectionProps) {
   );
 }
 
-function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
+function ProductionPanel({
+  state,
+  dispatch,
+  mode,
+}: SimpleSectionProps & { mode: "planning" | "facilities" }) {
   const capacity = getFactoryCapacity(state);
   const warehouseCapacity = getWarehouseCapacity(state);
   const activeProducts = state.products.filter((product) => product.active);
@@ -372,13 +329,18 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
     (sum, product) => sum + product.lastLostSales,
     0,
   );
+  const returns = activeProducts.reduce((sum, product) => sum + product.lastReturns, 0);
   const inventory = activeProducts.reduce(
     (sum, product) => sum + product.inventory,
     0,
   );
   const plannedOutput = activeProducts.reduce((sum, product) => {
     if (product.productionTarget !== null) return sum + product.productionTarget;
-    return sum + (getProductEconomics(state, product)?.demand ?? 0);
+    const economics = getProductEconomics(state, product);
+    const contractDemand = state.enterpriseContracts
+      .filter((contract) => contract.productId === product.id && (economics?.quality ?? 0) >= contract.minimumQuality)
+      .reduce((sum, contract) => sum + Math.max(0, contract.totalUnits - contract.fulfilledUnits), 0);
+    return sum + (economics?.demand ?? 0) + contractDemand;
   }, 0);
   const utilization = capacity > 0 ? (dailyOutput / capacity) * 100 : 0;
   const warehouseUtilization = warehouseCapacity > 0
@@ -388,10 +350,13 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
   const warehouseCost = getWarehouseUpgradeCost(state);
   const automationCost = getAutomationUpgradeCost(state);
   const automationRequirement = getAutomationRequirement(state);
+  const contractOffers = getEnterpriseContractOffers(state);
+  const contractCapacity = getEnterpriseContractCapacity(state);
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+      {mode === "planning" ? <>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-6">
         <Metric label="Produktionsplan" value={`${plannedOutput.toFixed(0)} / Tag`} />
         <Metric label="Fabrikkapazität" value={`${capacity} / Tag`} />
         <Metric label="Verkauft / Nachfrage" value={`${dailySales.toFixed(1)} / ${dailyDemand.toFixed(1)}`} />
@@ -401,6 +366,7 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
           value={lostSales.toFixed(1)}
           detail={lostSales > 0.1 ? "Produktion oder Lagerbestand erhöhen" : "Nachfrage wird bedient"}
         />
+        <Metric label="Retouren" value={returns.toFixed(1)} detail="Garantieansprüche pro Tag" />
       </div>
 
       {plannedOutput > capacity ? (
@@ -422,7 +388,10 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
         <div className="divide-y divide-slate-200 border-t border-slate-200">
           {activeProducts.map((product) => {
             const economics = getProductEconomics(state, product);
-            const demand = economics?.demand ?? product.lastDemand;
+            const contractDemand = state.enterpriseContracts
+              .filter((contract) => contract.productId === product.id && (economics?.quality ?? 0) >= contract.minimumQuality)
+              .reduce((sum, contract) => sum + Math.max(0, contract.totalUnits - contract.fulfilledUnits), 0);
+            const demand = (economics?.demand ?? product.lastDemand) + contractDemand;
             const target = product.productionTarget;
             const controlBase = target ?? Math.ceil(demand);
             const stockDays = product.inventory / Math.max(0.1, demand);
@@ -487,6 +456,77 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
         </div>
       </Panel>
 
+      <Panel>
+        <PanelHeader
+          eyebrow="Firmenkundengeschäft"
+          title="Firmenkundenaufträge"
+          description="Mehrere Gesamtaufträge können parallel laufen. Jeder wird sofort abgeschlossen, sobald seine Stückzahl vollständig geliefert ist."
+          action={<div className="flex items-center gap-2"><StatusBadge tone="info">{state.enterpriseContracts.length} aktiv</StatusBadge><ActionButton size="sm" variant={state.autoAcceptContracts ? "secondary" : "ghost"} onClick={() => dispatch({ type: "SET_AUTO_ACCEPT_CONTRACTS", enabled: !state.autoAcceptContracts })}>Auto {state.autoAcceptContracts ? "an" : "aus"}</ActionButton></div>}
+        />
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[0.68rem] text-slate-600">
+          <span>Freie nachhaltige Vertragskapazität</span>
+          <span className="font-mono font-semibold text-slate-900">{contractCapacity.available.toLocaleString("de-DE")} PCs / Tag</span>
+          <span className="basis-full text-slate-500">Auto nimmt nur profitable Aufträge mit 10 % Produktionsreserve an.</span>
+        </div>
+        {state.enterpriseContracts.length ? (
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            {state.enterpriseContracts.map((contract) => {
+              const product = activeProducts.find((candidate) => candidate.id === contract.productId);
+              return (
+                <div key={contract.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><p className="text-xs font-semibold text-slate-900">{contract.clientName}</p><p className="mt-1 text-[0.65rem] text-slate-500">{product?.name ?? "Produkt fehlt"} · noch {contract.daysRemaining} Tage</p></div>
+                    <StatusBadge>{formatMoney(contract.unitPrice)} / PC</StatusBadge>
+                  </div>
+                  <ProgressBar className="mt-3" value={contract.fulfilledUnits} max={contract.totalUnits} label="Gesamtauftrag" valueLabel={`${contract.fulfilledUnits.toFixed(0)} / ${contract.totalUnits}`} tone="green" />
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-[0.65rem] text-slate-500">
+                    <p><span className="block font-mono font-semibold text-slate-800">{contract.lastDelivery.toFixed(0)}</span>heute</p>
+                    <p><span className="block font-mono font-semibold text-slate-800">{getContractDailyTarget(contract).toFixed(0)}</span>nötig / Tag</p>
+                    <p><span className="block font-mono font-semibold text-slate-800">{formatCompactMoney(Math.max(0, contract.totalUnits - contract.fulfilledUnits) * contract.unitPrice)}</span>offen</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            {contractOffers.filter((offer) => !isEnterpriseContractOfferUsed(state, offer.id)).map((offer) => {
+              const eligible = activeProducts
+                .filter((product) => {
+                  const economics = getProductEconomics(state, product);
+                  return economics?.marketSegment === offer.segment && (economics?.quality ?? 0) >= offer.minimumQuality;
+                })
+                .sort((left, right) => (getProductEconomics(state, right)?.quality ?? 0) - (getProductEconomics(state, left)?.quality ?? 0))[0];
+              const eligibleEconomics = eligible ? getProductEconomics(state, eligible) : null;
+              const negotiatedUnitPrice = eligible
+                ? getEnterpriseContractUnitPrice(state, offer.unitPrice, eligible)
+                : offer.unitPrice;
+              const unitMargin = negotiatedUnitPrice - (eligibleEconomics?.unitCost ?? 0);
+              return (
+                <div key={offer.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-slate-900">{offer.clientName}</p><StatusBadge>{PC_MARKET_SEGMENTS[offer.segment].name}</StatusBadge></div>
+                  <p className="mt-2 font-mono text-sm font-semibold text-slate-900">{offer.totalUnits.toLocaleString("de-DE")} PCs gesamt</p>
+                  <p className="mt-1 text-[0.65rem] text-slate-500">{formatMoney(negotiatedUnitPrice)} je PC · Qualität ≥ {offer.minimumQuality} · Frist {offer.durationDays} Tage</p>
+                  {eligibleEconomics ? <p className={`mt-1 text-[0.65rem] font-medium ${unitMargin >= 0 ? "text-emerald-700" : "text-rose-700"}`}>Deckungsbeitrag vor Fixkosten: {formatMoney(unitMargin)} je PC</p> : null}
+                  <ActionButton
+                    className="mt-3"
+                    size="sm"
+                    fullWidth
+                    variant="secondary"
+                    disabled={!eligible}
+                    onClick={() => eligible && dispatch({ type: "ACCEPT_ENTERPRISE_CONTRACT", offerId: offer.id, productId: eligible.id })}
+                  >
+                    {eligible ? `${eligible.name} anbieten` : "Kein passendes Modell"}
+                  </ActionButton>
+                </div>
+              );
+            })}
+        </div>
+      </Panel>
+
+      </> : null}
+
+      {mode === "facilities" ? <>
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel>
           <PanelHeader
@@ -571,6 +611,27 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
       </div>
 
       <Panel>
+          <PanelHeader
+            eyebrow="Instandhaltung"
+            title={`Fabrikzustand ${state.factoryCondition.toFixed(0)} %`}
+            description="Auslastung und Automatisierung erzeugen Verschleiß. Wartung erhält Kapazität und senkt Retouren."
+            action={<StatusBadge tone={state.factoryCondition >= 80 ? "success" : state.factoryCondition >= 55 ? "warning" : "danger"}>{formatCompactMoney(state.maintenanceBudget)} / Tag</StatusBadge>}
+          />
+          <ProgressBar className="mt-4" value={state.factoryCondition} valueLabel={`${state.factoryCondition.toFixed(1)} %`} tone={state.factoryCondition >= 80 ? "green" : state.factoryCondition >= 55 ? "amber" : "red"} />
+          <label className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <span className="text-xs text-slate-600">Wartungsbudget / Tag</span>
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={state.maintenanceBudget}
+              onChange={(event) => dispatch({ type: "SET_MAINTENANCE_BUDGET", value: Number(event.target.value) })}
+              className="h-8 w-36 rounded-md border border-slate-300 bg-white px-2 text-right font-mono text-xs outline-none focus:border-blue-500"
+            />
+          </label>
+      </Panel>
+
+      <Panel>
         <PanelHeader
           eyebrow="Fertigungsziel"
           title="Qualität oder Menge"
@@ -602,6 +663,7 @@ function ProductionPanel({ state, dispatch }: SimpleSectionProps) {
           <span>Mehr Qualität</span>
         </div>
       </Panel>
+      </> : null}
     </div>
   );
 }
@@ -624,6 +686,37 @@ function MarketingPanel({ state, dispatch }: SimpleSectionProps) {
         <Metric label="Teamwirkung" value={`${efficiency.toFixed(2)}×`} detail={`${state.employees.marketing} Mitarbeitende · Level ${state.departmentLevels.marketing}`} />
         <Metric label="Markenwert" value={`${state.brand.toFixed(0)} / 100`} />
       </div>
+      <Panel>
+        <PanelHeader
+          eyebrow="Kampagnensteuerung"
+          title="Fokus & Zielgruppe"
+          description="Bestimme, was das Marketing erreichen soll und in welchem PC-Segment das Budget bevorzugt arbeitet."
+        />
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div>
+            <p className="mb-2 text-[0.62rem] font-semibold tracking-wide text-slate-500 uppercase">Marketingfokus</p>
+            <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1">
+              {(Object.keys(MARKETING_FOCUSES) as MarketingFocus[]).map((focus) => (
+                <button key={focus} type="button" onClick={() => dispatch({ type: "SET_MARKETING_FOCUS", focus })} className={`rounded-md px-2 py-2 text-[0.65rem] font-medium ${state.marketingFocus === focus ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`} title={MARKETING_FOCUSES[focus].description}>
+                  {MARKETING_FOCUSES[focus].name}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[0.65rem] text-slate-500">{MARKETING_FOCUSES[state.marketingFocus].description}</p>
+          </div>
+          <div>
+            <p className="mb-2 text-[0.62rem] font-semibold tracking-wide text-slate-500 uppercase">Zielsegment</p>
+            <div className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1">
+              {(["all", "budget", "mainstream", "performance"] as MarketingTarget[]).map((target) => (
+                <button key={target} type="button" onClick={() => dispatch({ type: "SET_MARKETING_TARGET", target })} className={`rounded-md px-2 py-2 text-[0.62rem] font-medium ${state.marketingTarget === target ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>
+                  {target === "all" ? "Alle" : PC_MARKET_SEGMENTS[target].name}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[0.65rem] text-slate-500">Ein Zielsegment erhält mehr Nachfragewirkung; die übrigen Segmente etwas weniger.</p>
+          </div>
+        </div>
+      </Panel>
       <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
       <div className="space-y-4">
         <Panel>
@@ -1048,30 +1141,47 @@ function FinancePanel({ state, dispatch }: SimpleSectionProps) {
 }
 
 export function SimpleCompanySection({ state, dispatch }: SimpleSectionProps) {
-  const [tab, setTab] = useState<CompanyTab>("production");
-
   return (
     <div className="space-y-5">
       <SectionTitle
-        eyebrow="Unternehmen"
-        title="Betrieb steuern"
-        description="Plane Stückzahlen, erweitere Fabrik und Lager und stelle das passende Team ein."
+        eyebrow="Infrastruktur"
+        title="Fabrik & Anlagen"
+        description="Erweitere Fertigung, Automatisierung und Lager und halte die Anlagen zuverlässig."
         action={
-          <StatusBadge tone={state.cash >= 0 ? "success" : "danger"} dot>
-            {formatCompactMoney(state.cash)} verfügbar
+          <StatusBadge tone={state.factoryCondition >= 75 ? "success" : "warning"} dot>
+            {state.factoryCondition.toFixed(0)} % Zustand
           </StatusBadge>
         }
       />
-      <Tabs
-        items={companyTabs}
-        value={tab}
-        onChange={setTab}
-        label="Unternehmensbereiche"
+      <ProductionPanel state={state} dispatch={dispatch} mode="facilities" />
+    </div>
+  );
+}
+
+export function SimpleProductionSection({ state, dispatch }: SimpleSectionProps) {
+  return (
+    <div className="space-y-5">
+      <SectionTitle
+        eyebrow="Operatives Geschäft"
+        title="Produktion & Aufträge"
+        description="Steuere Tagesmengen, Lagerfluss und Firmenkundenverträge an einem Ort."
+        action={<StatusBadge tone="info" dot>{getFactoryCapacity(state)} PCs / Tag</StatusBadge>}
       />
-      {tab === "team" ? <TeamPanel state={state} dispatch={dispatch} /> : null}
-      {tab === "production" ? (
-        <ProductionPanel state={state} dispatch={dispatch} />
-      ) : null}
+      <ProductionPanel state={state} dispatch={dispatch} mode="planning" />
+    </div>
+  );
+}
+
+export function SimplePeopleSection({ state, dispatch }: SimpleSectionProps) {
+  return (
+    <div className="space-y-5">
+      <SectionTitle
+        eyebrow="Organisation"
+        title="Personalplanung"
+        description="Plane Teams, Zielgrößen und Abteilungsentwicklung ohne andere Betriebsdaten dazwischen."
+        action={<StatusBadge tone="info" dot>{getEmployeeCount(state).toLocaleString("de-DE")} Mitarbeitende</StatusBadge>}
+      />
+      <TeamPanel state={state} dispatch={dispatch} />
     </div>
   );
 }
@@ -1131,6 +1241,7 @@ function StockCard({
   const periodLow = Math.min(company.price, ...chartValues);
   const trendColor = periodChange >= 0 ? "#16a34a" : "#dc2626";
   const monthlyDividend = getEstimatedMonthlyDividend(company);
+  const stake = getStrategicStakeLevel(company);
 
   return (
     <Panel padding="none" className="overflow-hidden">
@@ -1152,6 +1263,7 @@ function StockCard({
             <p className="mt-0.5 text-[0.64rem] text-slate-500">
               {company.sector}
             </p>
+            <p className="mt-1 text-[0.6rem] text-blue-700">{stake.label} · {stake.benefit}</p>
           </div>
         </div>
         <div className="text-right">
@@ -1315,6 +1427,80 @@ function StockCard({
         ) : null}
       </div>
     </Panel>
+  );
+}
+
+function CompetitionPanel({ state }: SimpleSectionProps) {
+  const offers = getCompetitorProductOffers(state)
+    .sort((left, right) => right.appeal - left.appeal);
+  const ownProducts = state.products
+    .filter((product) => product.active)
+    .map((product) => ({ product, economics: getProductEconomics(state, product) }))
+    .filter((entry) => entry.economics !== null);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <Metric label="Gesamtmarkt / Tag" value={Math.round(getDailyPcMarketSize(state)).toLocaleString("de-DE")} />
+        <Metric label="Aktive Anbieter" value={state.competitors.filter((company) => company.status === "active" && company.pcSegment).length} />
+        <Metric label="Konkurrenzmodelle" value={offers.length} />
+        <Metric label="Eigene Modelle" value={ownProducts.length} />
+      </div>
+
+      <Panel padding="none" className="overflow-hidden">
+        <div className="p-4 sm:p-5">
+          <PanelHeader
+            eyebrow="Eigene Marktposition"
+            title="Modelle im Vergleich"
+            description="Rang, Technikabstand und fairer Marktpreis zeigen direkt, wo dein Portfolio gegen die Konkurrenz steht."
+          />
+        </div>
+        <div className="overflow-x-auto border-t border-slate-200">
+          <table className="w-full min-w-[700px] text-left text-xs">
+            <thead className="bg-slate-50 text-slate-500"><tr>{["Eigenes Modell", "Segment", "Rang", "Technikabstand", "Preis / Marktpreis", "Nachfrage"].map((label) => <th key={label} className="px-4 py-3 font-semibold tracking-wide uppercase">{label}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-200">
+              {ownProducts.map(({ product, economics }) => economics ? (
+                <tr key={product.id}>
+                  <td className="px-4 py-3 font-semibold text-slate-900">{product.name} · G{product.generation}</td>
+                  <td className="px-4 py-3"><StatusBadge>{PC_MARKET_SEGMENTS[economics.marketSegment].name}</StatusBadge></td>
+                  <td className="px-4 py-3 font-mono">#{economics.marketRank}</td>
+                  <td className={`px-4 py-3 font-mono ${economics.relativePerformance >= 0 ? "text-emerald-700" : "text-amber-700"}`}>{economics.relativePerformance >= 0 ? "+" : ""}{economics.relativePerformance.toFixed(2)}</td>
+                  <td className="px-4 py-3 font-mono">{formatMoney(product.price)} / {formatMoney(economics.fairPrice)}</td>
+                  <td className="px-4 py-3 font-mono">{economics.demand.toFixed(1)} / Tag</td>
+                </tr>
+              ) : null)}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      <Panel padding="none" className="overflow-hidden">
+        <div className="p-4 sm:p-5">
+          <PanelHeader
+            eyebrow="Wettbewerbsbeobachtung"
+            title="Aktuelle Konkurrenzprodukte"
+            description="Diese Angebote verteilen gemeinsam mit deinen PCs die Nachfrage – unabhängig vom Aktienhandel."
+          />
+        </div>
+        <div className="overflow-x-auto border-t border-slate-200">
+          <table className="w-full min-w-[760px] text-left text-xs">
+            <thead className="bg-slate-50 text-slate-500"><tr>{["Produkt", "Segment", "Preis", "Technik", "Qualität", "Verfügbarkeit"].map((label) => <th key={label} className="px-4 py-3 font-semibold tracking-wide uppercase">{label}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-200">
+              {offers.map((offer) => (
+                <tr key={`${offer.competitorId}-${offer.segment}`} className="hover:bg-slate-50">
+                  <td className="px-4 py-3"><p className="font-semibold text-slate-900">{offer.name}</p><p className="mt-0.5 text-slate-500">{offer.companyName}</p></td>
+                  <td className="px-4 py-3"><StatusBadge>{PC_MARKET_SEGMENTS[offer.segment].name}</StatusBadge></td>
+                  <td className="px-4 py-3 font-mono text-slate-700">{formatMoney(offer.price)}</td>
+                  <td className="px-4 py-3 font-mono text-slate-700">{offer.technology.toFixed(2)}</td>
+                  <td className="px-4 py-3 font-mono text-slate-700">{offer.quality.toFixed(0)} / 100</td>
+                  <td className="px-4 py-3 font-mono text-slate-700">{percent(Math.min(1, offer.availability) * 100, 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
   );
 }
 
@@ -1494,7 +1680,7 @@ function DealsPanel({ state, dispatch }: SimpleSectionProps) {
               {control.label} · {percent(control.percentage)}
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              Fusionen benötigen mindestens 33,4 % Gründeranteil. Über 60 % kombiniertem Marktanteil blockiert das Kartellrecht.
+              Fusionen benötigen mindestens 33,4 % Gründeranteil. Übernahmen sind unabhängig vom gemeinsamen Marktanteil möglich.
             </p>
           </div>
           <StatusBadge tone="success" dot>Eigene Firma geschützt</StatusBadge>
@@ -1507,13 +1693,10 @@ function DealsPanel({ state, dispatch }: SimpleSectionProps) {
           {visibleCompetitors.map((company) => {
             const acquisitionPrice = getAcquisitionPrice(company);
             const merger = getMergerTerms(state, company);
-            const antitrustBlocked =
-              state.marketShare + company.marketShare > 60;
             const mergerBlocked =
               !merger ||
               control.percentage < 33.4 ||
-              state.cash < merger.cashCost ||
-              antitrustBlocked;
+              state.cash < merger.cashCost;
 
             return (
               <Panel key={company.id} padding="none" className="overflow-hidden">
@@ -1576,16 +1759,10 @@ function DealsPanel({ state, dispatch }: SimpleSectionProps) {
                     </p>
                   </div>
 
-                  {antitrustBlocked ? (
-                    <p className="mt-3 rounded-lg bg-amber-300/[0.07] px-2.5 py-2 text-[0.66rem] text-amber-800">
-                      Kartellrecht blockiert: zusammen wären es {percent(state.marketShare + company.marketShare)} Marktanteil.
-                    </p>
-                  ) : null}
-
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     <ActionButton
                       size="sm"
-                      disabled={antitrustBlocked || state.cash < acquisitionPrice}
+                      disabled={state.cash < acquisitionPrice}
                       onClick={() =>
                         dispatch({
                           type: "ACQUIRE_COMPETITOR",
@@ -1646,13 +1823,30 @@ function DealsPanel({ state, dispatch }: SimpleSectionProps) {
 
       {completedCompetitors.length ? (
         <Panel>
-          <PanelHeader title="Abgeschlossene Deals" />
-          <div className="mt-3 flex flex-wrap gap-2">
-            {completedCompetitors.map((company) => (
-              <StatusBadge key={company.id} tone="success" dot>
-                {company.name} · {company.status === "merged" ? "fusioniert" : "übernommen"}
-              </StatusBadge>
-            ))}
+          <PanelHeader title="Tochterunternehmen" description="Übernommene Unternehmen entwickeln Umsatz, Marge und Wert weiter. Du kannst sie vollständig verkaufen oder mit 30 % Restbeteiligung erneut an die Börse bringen." />
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {completedCompetitors.map((company) => {
+              const exit = getSubsidiaryExitQuote(company);
+              return (
+                <div key={company.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><p className="text-sm font-semibold text-slate-900">{company.name}</p><p className="mt-0.5 text-[0.65rem] text-slate-500">{company.status === "merged" ? "Fusioniert" : "100 % übernommen"} · {company.sector}</p></div>
+                    <StatusBadge tone={company.growth >= 0 ? "success" : "warning"}>{company.growth >= 0 ? "+" : ""}{percent(company.growth * 100)} Wachstum</StatusBadge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <Metric label="Jahresumsatz" value={formatCompactMoney(company.revenue)} />
+                    <Metric label="Marge" value={percent(company.profitMargin * 100)} />
+                    <Metric label="Unternehmenswert" value={formatCompactMoney(exit.enterpriseValue)} />
+                  </div>
+                  <p className="mt-3 text-[0.65rem] leading-4 text-slate-500">{company.lastReason}</p>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <ActionButton size="sm" variant="secondary" onClick={() => dispatch({ type: "DIVEST_COMPETITOR", competitorId: company.id })}>Verkaufen · {formatCompactMoney(exit.directSaleProceeds)}</ActionButton>
+                    <ActionButton size="sm" onClick={() => dispatch({ type: "RELIST_COMPETITOR", competitorId: company.id })}>Börsengang · {formatCompactMoney(exit.ipoProceeds)}</ActionButton>
+                  </div>
+                  <p className="mt-2 text-center text-[0.6rem] text-slate-500">Beim Börsengang bleiben 30 % als Beteiligung erhalten.</p>
+                </div>
+              );
+            })}
           </div>
         </Panel>
       ) : null}
@@ -1660,34 +1854,52 @@ function DealsPanel({ state, dispatch }: SimpleSectionProps) {
   );
 }
 
-export function SimpleMarketSection({ state, dispatch }: SimpleSectionProps) {
-  const [tab, setTab] = useState<MarketTab>("finance");
-
+export function SimpleCompetitionSection({ state, dispatch }: SimpleSectionProps) {
   return (
     <div className="space-y-5">
       <SectionTitle
-        eyebrow="Kapitalmarkt"
-        title="Markt & Konkurrenz"
-        description="Kurse folgen Umsatz, Marge, Wachstum, Schulden und Innovation – nicht dem Zufall."
+        eyebrow="Produktmarkt"
+        title="Absatzmarkt & Konkurrenz"
+        description="Vergleiche dein Portfolio mit den tatsächlich konkurrierenden Produkten in jedem Segment."
         action={
           <StatusBadge tone="info" dot>
-            {state.competitors.filter((company) => company.status === "active").length} Unternehmen
+            {state.competitors.filter((company) => company.status === "active" && company.pcSegment).length} Anbieter
           </StatusBadge>
         }
       />
-      <Tabs
-        items={marketTabs}
-        value={tab}
-        onChange={setTab}
-        label="Marktbereiche"
+      <CompetitionPanel state={state} dispatch={dispatch} />
+    </div>
+  );
+}
+
+export function SimpleFinanceSection({ state, dispatch }: SimpleSectionProps) {
+  return (
+    <div className="space-y-5">
+      <SectionTitle eyebrow="Kapitalstruktur" title="Finanzierung" description="Verwalte Kredite sowie Ausgabe und Rückkauf eigener Aktien." action={<StatusBadge tone={state.debt > state.valuation * 0.5 ? "warning" : "success"} dot>{formatCompactMoney(state.debt)} Schulden</StatusBadge>} />
+      <FinancePanel state={state} dispatch={dispatch} />
+    </div>
+  );
+}
+
+export function SimpleStocksSection({ state, dispatch }: SimpleSectionProps) {
+  return (
+    <div className="space-y-5">
+      <SectionTitle eyebrow="Wertpapiere" title="Aktienportfolio" description="Kaufe und verkaufe Beteiligungen. Produktvergleiche findest du getrennt unter Absatzmarkt." action={<StatusBadge tone="info" dot>{formatCompactMoney(getPortfolioValue(state))} Portfolio</StatusBadge>} />
+      <StocksPanel state={state} dispatch={dispatch} />
+    </div>
+  );
+}
+
+export function SimpleDealsSection({ state, dispatch }: SimpleSectionProps) {
+  return (
+    <div className="space-y-5">
+      <SectionTitle
+        eyebrow="Mergers & Acquisitions"
+        title="Übernahmen & Fusionen"
+        description="Bewerte strategische Ziele, Beteiligungsstufen und die Auswirkungen auf Cash und Kontrolle."
+        action={<StatusBadge tone="info" dot>{state.competitors.filter((company) => company.status === "active").length} Ziele</StatusBadge>}
       />
-      {tab === "finance" ? (
-        <FinancePanel state={state} dispatch={dispatch} />
-      ) : tab === "stocks" ? (
-        <StocksPanel state={state} dispatch={dispatch} />
-      ) : (
-        <DealsPanel state={state} dispatch={dispatch} />
-      )}
+      <DealsPanel state={state} dispatch={dispatch} />
     </div>
   );
 }

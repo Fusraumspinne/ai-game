@@ -29,8 +29,11 @@ import {
 import type {
   CompetitorState,
   DepartmentId,
+  EnterpriseContractState,
   GameAction,
+  GameDifficulty,
   GameState,
+  MarketingFocus,
   NewsItem,
   PcMarketSegment,
   PcResearchAttribute,
@@ -53,6 +56,25 @@ const ANNUAL_BASE_RATE = 0.072;
 export const LOAN_TERM_DAYS = DAYS_PER_YEAR * 5;
 const STOCK_TRADING_FEE = 0.0035;
 const DETAILED_COMPANY_HISTORY_MONTHS = 24;
+
+export const DIFFICULTY_SETTINGS: Record<GameDifficulty, {
+  name: string;
+  description: string;
+  startingCash: number;
+  playerDemand: number;
+  competitorTechnology: number;
+  interestAdjustment: number;
+}> = {
+  relaxed: { name: "Entspannt", description: "Mehr Startkapital und etwas nachsichtigere Märkte.", startingCash: 350_000, playerDemand: 1.18, competitorTechnology: -0.12, interestAdjustment: -0.01 },
+  realistic: { name: "Realistisch", description: "Ausgewogene Konkurrenz und Finanzierung.", startingCash: 225_000, playerDemand: 1, competitorTechnology: 0, interestAdjustment: 0 },
+  hard: { name: "Hart", description: "Knappes Kapital, stärkere Rivalen und teurere Kredite.", startingCash: 100_000, playerDemand: 0.84, competitorTechnology: 0.18, interestAdjustment: 0.018 },
+};
+
+export const MARKETING_FOCUSES: Record<MarketingFocus, { name: string; description: string; reach: number; brand: number }> = {
+  awareness: { name: "Bekanntheit", description: "Mehr Reichweite und stärkerer Markenaufbau.", reach: 1.1, brand: 1.35 },
+  conversion: { name: "Verkauf", description: "Ausgewogener Fokus auf messbaren Absatz.", reach: 1.04, brand: 1 },
+  loyalty: { name: "Kundenbindung", description: "Weniger Reichweite, aber stabilere Marke bei Retouren.", reach: 0.97, brand: 0.9 },
+};
 
 const MONTH_NAMES = [
   "Januar",
@@ -138,6 +160,30 @@ export interface ProductEconomics {
   revenue: number;
   productionCost: number;
   grossProfit: number;
+  warrantyRate: number;
+  warrantyCost: number;
+}
+
+export interface CompetitorProductOffer {
+  competitorId: string;
+  companyName: string;
+  name: string;
+  segment: PcMarketSegment;
+  technology: number;
+  price: number;
+  quality: number;
+  availability: number;
+  appeal: number;
+}
+
+export interface EnterpriseContractOffer {
+  id: string;
+  clientName: string;
+  segment: PcMarketSegment;
+  totalUnits: number;
+  unitPrice: number;
+  minimumQuality: number;
+  durationDays: number;
 }
 
 export interface MergerTerms {
@@ -208,6 +254,8 @@ export function compactCompanyHistory(points: readonly GameState["history"][numb
     annual.set(year, {
       ...point,
       revenue: (previous?.revenue ?? 0) + point.revenue,
+      productRevenue: (previous?.productRevenue ?? 0) + (point.productRevenue ?? point.revenue),
+      contractRevenue: (previous?.contractRevenue ?? 0) + (point.contractRevenue ?? 0),
       expenses: (previous?.expenses ?? 0) + point.expenses,
       profit: (previous?.profit ?? 0) + point.profit,
     });
@@ -455,6 +503,7 @@ export function getMarketingEfficiency(state: GameState) {
 
 function getMarketingReach(state: GameState) {
   const strategy = MARKETING_STRATEGIES[state.marketingStrategy];
+  const focus = MARKETING_FOCUSES[state.marketingFocus];
   const addressableRevenue = getDailyPcMarketSize(state) * 1_100;
   const effectiveMarketBudget = 5_000 + addressableRevenue * 0.0025;
   const spendingPressure = Math.max(0, state.marketingBudget) / effectiveMarketBudget;
@@ -463,7 +512,7 @@ function getMarketingReach(state: GameState) {
     0,
     1.5,
   );
-  return (1 + paidReach) * strategy.demandMultiplier;
+  return (1 + paidReach) * strategy.demandMultiplier * focus.reach;
 }
 
 export function getDailySalesCapacity(state: GameState) {
@@ -496,13 +545,15 @@ export function getFactoryCapacity(state: GameState) {
   const leanBonus = state.unlockedTech.includes("lean-fabs") ? 1.15 : 1;
   const roboticsBonus = hasCompletedDeal(state, "helixrobotics") ? 1.15 : 1;
   const organizationFactor = 0.72 + getWorkforcePlan(state).readiness * 0.28;
+  const conditionFactor = 0.55 + clamp(state.factoryCondition, 0, 100) / 220;
   const laborCapacity =
     productionEmployees ** 0.92 *
     (1.8 + Math.sqrt(departmentLevel) * 0.55) *
     (1 + Math.sqrt(Math.max(0, state.automationLevel)) * 0.18) *
     leanBonus *
     roboticsBonus *
-    organizationFactor;
+    organizationFactor *
+    conditionFactor;
   const facilityCapacity =
     35 *
     3.3 ** Math.max(0, state.factoryLevel - 1) *
@@ -563,6 +614,7 @@ export function getTechStatus(state: GameState, techOrId: TechDefinition | strin
 function getProductQuality(state: GameState, product: ProductState, blueprint: ProductBlueprint) {
   let bonus = product.qualityBonus;
   bonus += (clamp(state.qualityFocus, 0.7, 1.3) - 1) * 20;
+  bonus += (clamp(state.factoryCondition, 0, 100) - 80) * 0.08;
   if (blueprint.category === "computer" && state.unlockedTech.includes("silicon16")) bonus += 6;
   if (blueprint.category === "phone" && state.unlockedTech.includes("lithium-cells")) bonus += 10;
   if (state.unlockedTech.includes("machine-learning")) bonus += 3;
@@ -620,6 +672,146 @@ export function getDailyPcMarketSize(state: GameState) {
   return Math.min(4_000_000, earlyMarket + consumerAdoption + connectedDeviceWave);
 }
 
+export function getEnterpriseContractOffers(state: GameState): EnterpriseContractOffer[] {
+  const month = Math.floor(state.day / DAYS_PER_MONTH);
+  const clients = ["Stadtverwaltung", "Nordstern Versicherung", "Helios Logistik"];
+  return (Object.keys(PC_MARKET_SEGMENTS) as PcMarketSegment[]).map((segment, index) => {
+    const deliverableCapacity = Math.max(1, Math.min(getFactoryCapacity(state), getDailySalesCapacity(state)));
+    const contractShare = 0.32 + index * 0.12 + ((month + index) % 3) * 0.04;
+    const priceInflation = 1 + Math.min(0.45, state.day / 8_000);
+    const durationDays = 120 + index * 30;
+    return {
+      id: `enterprise-${month}-${segment}`,
+      clientName: clients[(month + index) % clients.length],
+      segment,
+      totalUnits: Math.min(
+        Number.MAX_SAFE_INTEGER,
+        Math.max(1, Math.round(finite(deliverableCapacity, 1) * contractShare * durationDays)),
+      ),
+      unitPrice: Math.round(PC_MARKET_SEGMENTS[segment].basePrice * priceInflation * (0.78 + index * 0.035)),
+      minimumQuality: 42 + index * 16 + Math.min(18, Math.floor(state.day / 1_200)),
+      durationDays,
+    };
+  });
+}
+
+export function getEnterpriseContractUnitPrice(
+  state: GameState,
+  offeredUnitPrice: number,
+  product: ProductState,
+) {
+  const blueprint = resolveProductBlueprint(product);
+  if (!blueprint) return 0;
+  const unitCost = getUnitCost(state, blueprint, product);
+  const segment = getProductSegment(product);
+  const maximumMarkup = segment === "budget" ? 1.07 : segment === "mainstream" ? 1.1 : 1.13;
+  // Großkunden handeln einen Mengenrabatt aus. Gleichzeitig darf stark
+  // verbilligte Alttechnik nicht dauerhaft zum historischen Marktpreis zur
+  // Gelddruckmaschine werden.
+  return roundMoney(Math.max(0, Math.min(
+    finite(offeredUnitPrice),
+    product.price * 0.94,
+    unitCost * maximumMarkup,
+  )));
+}
+
+export function isEnterpriseContractOfferUsed(state: GameState, offerId: string) {
+  if (state.enterpriseContracts.some((contract) => contract.id === offerId)) return true;
+  return state.news.some((item) =>
+    item.id.startsWith(`contract-complete-${offerId}-`) ||
+    item.id.startsWith(`contract-missed-${offerId}-`),
+  );
+}
+
+export function getEnterpriseContractCapacity(state: GameState) {
+  const factoryCapacity = getFactoryCapacity(state);
+  const manualProduction = state.products.reduce(
+    (sum, product) => sum + (product.active && product.productionTarget !== null
+      ? Math.max(0, finite(product.productionTarget))
+      : 0),
+    0,
+  );
+  const automaticConsumerDemand = state.products.reduce(
+    (sum, product) => sum + (product.active && product.productionTarget === null
+      ? (getProductEconomics(state, product)?.demand ?? 0)
+      : 0),
+    0,
+  );
+  const consumerProduction = manualProduction + Math.min(
+    automaticConsumerDemand,
+    getDailySalesCapacity(state),
+  );
+  const committedContracts = state.enterpriseContracts.reduce(
+    (sum, contract) => sum + getContractDailyTarget(contract),
+    0,
+  );
+  const safeCapacity = factoryCapacity * 0.9;
+  return {
+    factoryCapacity,
+    consumerProduction,
+    committedContracts,
+    safetyReserve: factoryCapacity - safeCapacity,
+    available: Math.max(0, Math.floor(safeCapacity - consumerProduction - committedContracts)),
+  };
+}
+
+function appendEnterpriseContract(
+  state: GameState,
+  offer: EnterpriseContractOffer,
+  product: ProductState,
+) {
+  const unitPrice = getEnterpriseContractUnitPrice(state, offer.unitPrice, product);
+  return {
+    ...state,
+    enterpriseContracts: [
+      ...state.enterpriseContracts,
+      {
+        ...offer,
+        unitPrice,
+        productId: product.id,
+        daysRemaining: offer.durationDays,
+        totalDays: offer.durationDays,
+        fulfilledUnits: 0,
+        lastDelivery: 0,
+      },
+    ],
+  };
+}
+
+function acceptAutomaticEnterpriseContracts(state: GameState) {
+  if (!state.autoAcceptContracts) return state;
+  let next = state;
+  for (const offer of getEnterpriseContractOffers(state)) {
+    if (isEnterpriseContractOfferUsed(next, offer.id)) continue;
+    const product = next.products
+      .filter((candidate) => {
+        if (!candidate.active || getProductSegment(candidate) !== offer.segment) return false;
+        const blueprint = resolveProductBlueprint(candidate);
+        return Boolean(blueprint && getProductQuality(next, candidate, blueprint) >= offer.minimumQuality);
+      })
+      .map((candidate) => {
+        const economics = getProductEconomics(next, candidate);
+        const unitPrice = getEnterpriseContractUnitPrice(next, offer.unitPrice, candidate);
+        return { candidate, economics, unitPrice, unitMargin: unitPrice - (economics?.unitCost ?? Number.POSITIVE_INFINITY) };
+      })
+      .filter((entry) => entry.economics && entry.unitMargin >= entry.economics.unitCost * 0.01)
+      .sort((left, right) => right.unitMargin - left.unitMargin)[0];
+    if (!product) continue;
+    const dailyCommitment = Math.ceil(offer.totalUnits / Math.max(1, offer.durationDays));
+    if (dailyCommitment > getEnterpriseContractCapacity(next).available) continue;
+    next = appendEnterpriseContract(next, offer, product.candidate);
+  }
+  return next;
+}
+
+export function getContractDailyTarget(contract: EnterpriseContractState) {
+  const totalUnits = Math.max(1, finite(contract.totalUnits, 1));
+  const fulfilledUnits = clamp(finite(contract.fulfilledUnits), 0, totalUnits);
+  const daysRemaining = Math.max(1, positiveInteger(contract.daysRemaining, 1));
+  const remaining = Math.max(0, totalUnits - fulfilledUnits);
+  return Math.min(remaining, Math.ceil(remaining / daysRemaining));
+}
+
 function getPcSegmentShare(segment: PcMarketSegment, day: number) {
   const maturity = clamp(day / 7_200, 0, 1);
   if (segment === "budget") return 0.5 - maturity * 0.1;
@@ -651,6 +843,8 @@ interface CompetitorPcOffer {
   segment: PcMarketSegment;
   technology: number;
   price: number;
+  quality: number;
+  availability: number;
   appeal: number;
 }
 
@@ -662,7 +856,10 @@ function getCompetitorPcOffers(state: GameState): CompetitorPcOffer[] {
     const productCycle = Math.sin(state.day / 95 + seed * 0.17) * 0.16;
     const technology = Math.max(
       0.5,
-      frontier + (competitor.innovation - 58) / 68 + productCycle,
+      frontier +
+        (competitor.innovation - 58) / 68 +
+        productCycle +
+        DIFFICULTY_SETTINGS[state.difficulty].competitorTechnology,
     );
     const segment = competitor.pcSegment;
     const priceAnchor = PC_MARKET_SEGMENTS[segment].basePrice * (1 + Math.min(0.45, state.day / 8_000));
@@ -680,8 +877,27 @@ function getCompetitorPcOffers(state: GameState): CompetitorPcOffer[] {
       segment,
       technology,
       price,
+      quality: clamp(35 + competitor.innovation * 0.45 + competitor.brand * 0.18, 25, 98),
+      availability,
       appeal: Math.max(0.01, technologyFactor * priceFactor * brandReach * availability),
     }];
+  });
+}
+
+export function getCompetitorProductOffers(state: GameState): CompetitorProductOffer[] {
+  return getCompetitorPcOffers(state).map((offer) => {
+    const generation = Math.max(1, Math.floor(state.day / 540) + 1);
+    return {
+      competitorId: offer.competitor.id,
+      companyName: offer.competitor.name,
+      name: `${offer.competitor.ticker} ${PC_MARKET_SEGMENTS[offer.segment].name} G${generation}`,
+      segment: offer.segment,
+      technology: offer.technology,
+      price: offer.price,
+      quality: offer.quality,
+      availability: offer.availability,
+      appeal: offer.appeal,
+    };
   });
 }
 
@@ -743,9 +959,21 @@ function calculateProductMarketMetrics(state: GameState) {
     const technologyAppeal = relativePerformance < 0
       ? Math.exp(clamp(relativePerformance, -12, 0) * 2.05)
       : Math.exp(clamp(relativePerformance, 0, 1.75) * 1.15);
+    const newestGeneration = Math.max(
+      candidate.generation,
+      ...activeComputers
+        .filter((product) => getProductSegment(product) === segment)
+        .map((product) => product.generation),
+    );
+    const generationFactor = 0.62 ** Math.max(0, newestGeneration - candidate.generation);
+    const targetFactor = state.marketingTarget === "all"
+      ? 1
+      : state.marketingTarget === segment
+        ? 1.16
+        : 0.93;
     const appeal = Math.max(
       0.000001,
-      technologyAppeal * ageFactor * priceCompetitiveness * qualityFactor,
+      technologyAppeal * ageFactor * priceCompetitiveness * qualityFactor * generationFactor * targetFactor,
     );
     const marketRank = 1 + segmentCompetitors.filter((offer) => offer.technology > technology).length;
     return {
@@ -779,7 +1007,10 @@ function calculateProductMarketMetrics(state: GameState) {
     if (!entries.length) continue;
     const sortedAppeals = entries.map((entry) => entry.appeal).sort((a, b) => b - a);
     const portfolioAppeal = sortedAppeals[0];
-    const playerWeight = portfolioAppeal * companyReach;
+    // Junge Firmen bekommen eine kleine, zeitlich begrenzte lokale Startreichweite.
+    // Sie verhindert einen frustrierenden Stillstand, ersetzt aber kein gutes Produkt.
+    const startupReach = 1 + 0.12 * clamp(1 - state.day / 180, 0, 1);
+    const playerWeight = portfolioAppeal * companyReach * DIFFICULTY_SETTINGS[state.difficulty].playerDemand * startupReach;
     const competitorWeight = competitorOffers
       .filter((offer) => offer.segment === segment)
       .reduce((sum, offer) => sum + offer.appeal, 0);
@@ -833,6 +1064,23 @@ function getProductMarketMetrics(
   };
 }
 
+export function getProductWarrantyRate(
+  state: GameState,
+  product: ProductState,
+) {
+  const blueprint = resolveProductBlueprint(product);
+  if (!blueprint) return 0;
+  const quality = getProductQuality(state, product, blueprint);
+  const build = product.configuration ? evaluatePcBuild(product.configuration) : null;
+  const compatibilityPenalty = build?.issues.filter((issue) => issue.type === "warning").length ?? 0;
+  return clamp(
+    0.075 - quality * 0.00062 + compatibilityPenalty * 0.006 +
+      Math.max(0, 75 - state.factoryCondition) * 0.00045,
+    0.004,
+    0.14,
+  );
+}
+
 export function getProductEconomics(
   state: GameState,
   productOrId: ProductState | string,
@@ -851,13 +1099,15 @@ export function getProductEconomics(
   const demand = marketMetrics.demand;
   const production = Math.max(0, product.lastProduction);
   const sales = Math.max(0, product.lastSales);
+  const warrantyRate = getProductWarrantyRate(state, product);
+  const warrantyCost = sales * warrantyRate * unitCost * 0.45;
   const revenue = sales * product.price;
   const productionCost = production * unitCost;
   return {
     blueprint,
     unitCost,
-    unitMargin: product.price - unitCost,
-    margin: (product.price - unitCost) / Math.max(1, product.price),
+    unitMargin: product.price - unitCost - warrantyRate * unitCost * 0.45,
+    margin: (product.price - unitCost - warrantyRate * unitCost * 0.45) / Math.max(1, product.price),
     quality,
     ageDays,
     ageFactor,
@@ -876,7 +1126,9 @@ export function getProductEconomics(
     sales,
     revenue,
     productionCost,
-    grossProfit: revenue - sales * unitCost,
+    grossProfit: revenue - sales * unitCost - warrantyCost,
+    warrantyRate,
+    warrantyCost,
   };
 }
 
@@ -922,7 +1174,17 @@ export function getEstimatedMonthlyDividend(competitor: CompetitorState) {
     (annualProfit * payoutRatio) /
     12 /
     Math.max(1, competitor.sharesOutstanding);
-  return Math.max(0, dividendPerShare * competitor.ownedShares);
+  const ownership = competitor.ownedShares / Math.max(1, competitor.sharesOutstanding);
+  const strategicBonus = ownership >= 0.2 ? 1.1 : 1;
+  return Math.max(0, dividendPerShare * competitor.ownedShares * strategicBonus);
+}
+
+export function getStrategicStakeLevel(competitor: CompetitorState) {
+  const percentage = (competitor.ownedShares / Math.max(1, competitor.sharesOutstanding)) * 100;
+  if (percentage >= 33.4) return { percentage, level: "board", label: "Board-Einfluss", benefit: "Geringere Übernahmeprämie" } as const;
+  if (percentage >= 20) return { percentage, level: "partner", label: "Strategische Partnerschaft", benefit: "+10 % Beteiligungsdividende" } as const;
+  if (percentage >= 5) return { percentage, level: "insider", label: "Informationsrecht", benefit: "Fundamentaldaten vollständig sichtbar" } as const;
+  return { percentage, level: "financial", label: "Finanzanlage", benefit: "Keine strategischen Rechte" } as const;
 }
 
 export function getEstimatedMonthlyPortfolioIncome(state: GameState) {
@@ -1149,7 +1411,30 @@ export function getBuybackQuote(state: GameState, requestedPercent: number): Buy
 export function getAcquisitionPrice(competitor: CompetitorState) {
   if (competitor.status !== "active") return 0;
   const remainingShares = Math.max(0, competitor.sharesOutstanding - competitor.ownedShares);
-  return remainingShares * competitor.price * 1.28;
+  const ownership = competitor.ownedShares / Math.max(1, competitor.sharesOutstanding);
+  const premium = ownership >= 0.334 ? 1.08 : ownership >= 0.2 ? 1.18 : 1.28;
+  return remainingShares * competitor.price * premium;
+}
+
+export function getSubsidiaryExitQuote(competitor: CompetitorState) {
+  const eligible = competitor.status === "acquired" || competitor.status === "merged";
+  const referencePrice = Math.max(0.01, finite(competitor.fairValue, competitor.price));
+  const enterpriseValue = referencePrice * Math.max(1, competitor.sharesOutstanding);
+  const ipoRetainedShares = Math.round(competitor.sharesOutstanding * 0.3);
+  const ipoSoldShares = Math.max(0, competitor.sharesOutstanding - ipoRetainedShares);
+  const directSaleProceeds = eligible ? enterpriseValue * 0.88 : 0;
+  const ipoPrice = referencePrice * 0.93;
+  const ipoProceeds = eligible ? ipoSoldShares * ipoPrice : 0;
+  return {
+    enterpriseValue,
+    referencePrice,
+    directSaleProceeds,
+    ipoPrice,
+    ipoProceeds,
+    ipoSoldShares,
+    ipoRetainedShares,
+    retainedPercentage: 30,
+  };
 }
 
 export function getMergerTerms(
@@ -1372,6 +1657,19 @@ function applyAcquisitionPerk(state: GameState, competitorId: string) {
   if (competitorId === "helixrobotics") {
     return { ...state, automationLevel: state.automationLevel + 1 };
   }
+  const competitor = state.competitors.find((candidate) => candidate.id === competitorId);
+  if (competitor?.pcSegment === "budget") {
+    return { ...state, marketShare: clamp(state.marketShare + 0.5, 0, 100) };
+  }
+  if (competitor?.pcSegment === "mainstream") {
+    return { ...state, brand: clamp(state.brand + 2, 0, 100) };
+  }
+  if (competitor?.pcSegment === "performance") {
+    return { ...state, researchPoints: state.researchPoints + 250 };
+  }
+  if (competitor) {
+    return { ...state, reputation: clamp(state.reputation + 2, 0, 100) };
+  }
   return state;
 }
 
@@ -1380,7 +1678,14 @@ export function getAnnualInterestRate(state: GameState) {
   const financeReduction =
     Math.max(0, state.departmentLevels.finance - 1) * 0.003 +
     Math.log1p(Math.max(0, state.employees.finance)) * 0.0014;
-  return clamp(ANNUAL_BASE_RATE + Math.max(0, leverage - 0.2) * 0.09 - financeReduction, 0.035, 0.18);
+  return clamp(
+    ANNUAL_BASE_RATE +
+      Math.max(0, leverage - 0.2) * 0.09 -
+      financeReduction +
+      DIFFICULTY_SETTINGS[state.difficulty].interestAdjustment,
+    0.025,
+    0.22,
+  );
 }
 
 export function getDailyDebtRepayment(state: GameState) {
@@ -1390,7 +1695,7 @@ export function getDailyDebtRepayment(state: GameState) {
   );
 }
 
-function getConsolidatedBusiness(state: GameState) {
+export function getDailyConsolidatedBusiness(state: GameState) {
   return state.competitors.reduce(
     (result, competitor) => {
       if (competitor.status === "active") return result;
@@ -1403,26 +1708,122 @@ function getConsolidatedBusiness(state: GameState) {
   );
 }
 
+export function getMonthlyFinancialProjection(state: GameState) {
+  const consumerSalesByProduct = new Map(state.products.map((product) => [
+    product.id,
+    Math.max(0, finite(product.lastSales) - finite(product.lastContractSales)),
+  ]));
+  const productRevenue = state.products.reduce(
+    (sum, product) => sum + (consumerSalesByProduct.get(product.id) ?? 0) * product.price,
+    0,
+  ) * DAYS_PER_MONTH;
+  const projectedContractUnits = new Map<string, number>();
+  const contractRevenue = state.enterpriseContracts.reduce((sum, contract) => {
+    const remainingUnits = Math.max(0, contract.totalUnits - contract.fulfilledUnits);
+    const observedDailyDelivery = Math.max(0, finite(contract.lastDelivery));
+    const projectedUnits = Math.min(
+      remainingUnits,
+      observedDailyDelivery * Math.min(DAYS_PER_MONTH, contract.daysRemaining),
+    );
+    projectedContractUnits.set(contract.id, projectedUnits);
+    return sum + projectedUnits * contract.unitPrice;
+  }, 0);
+  const consolidated = getDailyConsolidatedBusiness(state);
+  const subsidiaryRevenue = consolidated.revenue * DAYS_PER_MONTH;
+  const portfolioIncome = getEstimatedMonthlyPortfolioIncome(state);
+  const productProductionExpenses = state.products.reduce(
+    (sum, product) => sum + (consumerSalesByProduct.get(product.id) ?? 0) *
+      (getProductEconomics(state, product)?.unitCost ?? 0),
+    0,
+  ) * DAYS_PER_MONTH;
+  const contractProductionExpenses = state.enterpriseContracts.reduce((sum, contract) => {
+    const economics = getProductEconomics(state, contract.productId);
+    return sum + (projectedContractUnits.get(contract.id) ?? 0) * (economics?.unitCost ?? 0);
+  }, 0);
+  const productionExpenses = productProductionExpenses + contractProductionExpenses;
+  const productWarrantyExpenses = state.products.reduce(
+    (sum, product) => {
+      const economics = getProductEconomics(state, product);
+      return sum + (consumerSalesByProduct.get(product.id) ?? 0) *
+        getProductWarrantyRate(state, product) * (economics?.unitCost ?? 0) * 0.45;
+    },
+    0,
+  ) * DAYS_PER_MONTH;
+  const contractWarrantyExpenses = state.enterpriseContracts.reduce((sum, contract) => {
+    const product = state.products.find((candidate) => candidate.id === contract.productId);
+    const economics = product ? getProductEconomics(state, product) : null;
+    if (!product || !economics) return sum;
+    return sum + (projectedContractUnits.get(contract.id) ?? 0) *
+      getProductWarrantyRate(state, product) * economics.unitCost * 0.45;
+  }, 0);
+  const warrantyExpenses = productWarrantyExpenses + contractWarrantyExpenses;
+  const payrollExpenses = getDailyPayroll(state) * DAYS_PER_MONTH;
+  const marketingExpenses = getDailyMarketingCost(state) * DAYS_PER_MONTH;
+  const maintenanceExpenses = Math.max(0, state.maintenanceBudget) * DAYS_PER_MONTH;
+  const interestExpenses = (Math.max(0, state.debt) * getAnnualInterestRate(state)) / 12;
+  const subsidiaryExpenses = consolidated.expenses * DAYS_PER_MONTH;
+  const contractPenalties = state.enterpriseContracts.reduce((sum, contract) => {
+    if (contract.daysRemaining > DAYS_PER_MONTH) return sum;
+    const remainingUnits = Math.max(0, contract.totalUnits - contract.fulfilledUnits);
+    const requiredPace = getContractDailyTarget(contract);
+    const observedPace = contract.lastDelivery > 0 ? contract.lastDelivery : requiredPace;
+    const expectedShortfall = Math.max(0, remainingUnits - observedPace * contract.daysRemaining);
+    return sum + expectedShortfall * contract.unitPrice * 0.08;
+  }, 0);
+  const debtPrincipal = Math.min(
+    Math.max(0, state.debt),
+    getDailyDebtRepayment(state) * DAYS_PER_MONTH,
+  );
+  const totalIncome = productRevenue + contractRevenue + subsidiaryRevenue + portfolioIncome;
+  const operatingExpenses = productionExpenses + warrantyExpenses + payrollExpenses +
+    marketingExpenses + maintenanceExpenses + interestExpenses + contractPenalties + subsidiaryExpenses;
+  const totalOutflow = operatingExpenses + debtPrincipal;
+  return {
+    productRevenue,
+    contractRevenue,
+    subsidiaryRevenue,
+    portfolioIncome,
+    productionExpenses,
+    productProductionExpenses,
+    contractProductionExpenses,
+    warrantyExpenses,
+    productWarrantyExpenses,
+    contractWarrantyExpenses,
+    payrollExpenses,
+    marketingExpenses,
+    maintenanceExpenses,
+    interestExpenses,
+    contractPenalties,
+    subsidiaryExpenses,
+    debtPrincipal,
+    creditPayment: interestExpenses + debtPrincipal,
+    totalIncome,
+    operatingExpenses,
+    totalOutflow,
+    profit: totalIncome - totalOutflow,
+  };
+}
+
 export function calculatePlayerFairValue(state: GameState) {
   const monthDay = state.day % DAYS_PER_MONTH || DAYS_PER_MONTH;
-  const currentRevenueRunRate = (state.monthlyRevenue / Math.max(1, monthDay)) * DAYS_PER_MONTH;
-  const currentExpenseRunRate = (state.monthlyExpenses / Math.max(1, monthDay)) * DAYS_PER_MONTH;
+  const currentRevenueRunRate = (Math.max(0, finite(state.monthlyRevenue)) / Math.max(1, monthDay)) * DAYS_PER_MONTH;
+  const currentExpenseRunRate = (Math.max(0, finite(state.monthlyExpenses)) / Math.max(1, monthDay)) * DAYS_PER_MONTH;
   // Innerhalb eines Monats werden die noch unvollstaendigen Zahlen mit dem
   // letzten abgeschlossenen Monat gewichtet. So folgt die Bewertung den echten
   // Fundamentaldaten, ohne am Monatsanfang durch einen einzelnen Tag zu springen.
   const monthProgress = clamp(monthDay / DAYS_PER_MONTH, 0, 1);
-  const revenueBaseline = state.lastMonthRevenue > 0
-    ? state.lastMonthRevenue
+  const revenueBaseline = finite(state.lastMonthRevenue) > 0
+    ? finite(state.lastMonthRevenue)
     : currentRevenueRunRate;
-  const expenseBaseline = state.lastMonthExpenses > 0
-    ? state.lastMonthExpenses
+  const expenseBaseline = finite(state.lastMonthExpenses) > 0
+    ? finite(state.lastMonthExpenses)
     : currentExpenseRunRate;
   const monthlyRevenue = revenueBaseline + (currentRevenueRunRate - revenueBaseline) * monthProgress;
   const monthlyExpenses = expenseBaseline + (currentExpenseRunRate - expenseBaseline) * monthProgress;
   const annualRevenue = Math.max(0, monthlyRevenue * 12);
   const annualProfit = Math.max(0, (monthlyRevenue - monthlyExpenses) * 12);
-  const growth = state.lastMonthRevenue > 0
-    ? clamp(currentRevenueRunRate / state.lastMonthRevenue - 1, -0.6, 1.2)
+  const growth = finite(state.lastMonthRevenue) > 0
+    ? clamp(currentRevenueRunRate / finite(state.lastMonthRevenue, 1) - 1, -0.6, 1.2)
     : 0;
   const revenueMultiple = clamp(0.16 + state.brand / 220 + state.reputation / 650 + state.marketShare / 110 + Math.max(0, growth) * 0.15, 0.12, 1.1);
   const advancedTracks = PC_RESEARCH_ATTRIBUTE_IDS.filter(
@@ -1450,29 +1851,33 @@ export function calculatePlayerFairValue(state: GameState) {
     return total + (blueprint ? product.inventory * getUnitCost(state, blueprint, product) * 0.65 : 0);
   }, 0);
   const operatingAssets =
-    250_000 * state.factoryLevel ** 1.35 +
-    state.automationLevel * 90_000 +
-    68_000 * state.warehouseLevel ** 1.25 +
-    inventoryValue;
+    finite(250_000 * Math.max(1, finite(state.factoryLevel, 1)) ** 1.35) +
+    finite(Math.max(0, finite(state.automationLevel)) * 90_000) +
+    finite(68_000 * Math.max(1, finite(state.warehouseLevel, 1)) ** 1.25) +
+    finite(inventoryValue);
+  const fairValueCandidate =
+    finite(state.cash) - Math.max(0, finite(state.debt)) +
+    finite(getPortfolioValue(state)) * 0.9 +
+    finite(annualRevenue * revenueMultiple) +
+    finite(annualProfit * profitMultiple) +
+    finite(technologyValue) +
+    finite(productValue) +
+    finite(operatingAssets);
   const fairValue = Math.max(
     250_000,
-    state.cash - state.debt +
-      getPortfolioValue(state) * 0.9 +
-      annualRevenue * revenueMultiple +
-      annualProfit * profitMultiple +
-      technologyValue +
-      productValue +
-      operatingAssets,
+    finite(fairValueCandidate, 250_000),
   );
-  return Number.isFinite(fairValue)
-    ? Math.min(Number.MAX_SAFE_INTEGER, fairValue)
-    : Number.MAX_SAFE_INTEGER;
+  return Math.min(Number.MAX_SAFE_INTEGER, fairValue);
 }
 
 function updateCompetitor(competitor: CompetitorState, day: number): CompetitorState {
-  if (competitor.status !== "active") return { ...competitor };
+  if (competitor.status === "bankrupt") return { ...competitor };
+  const isSubsidiary = competitor.status === "acquired" || competitor.status === "merged";
+  const subsidiaryGrowthBonus = competitor.status === "merged" ? 0.018 : competitor.status === "acquired" ? 0.012 : 0;
+  const subsidiaryMarginBonus = competitor.status === "merged" ? 0.012 : competitor.status === "acquired" ? 0.007 : 0;
   const marketEra = Math.min(6, Math.floor(day / 1_080));
-  const tailwindProfile = COMPETITOR_TAILWINDS[competitor.id] ?? [-0.005];
+  const generatedTailwind = ((competitorSeed(competitor) % 21) - 10) / 1_000;
+  const tailwindProfile = COMPETITOR_TAILWINDS[competitor.id] ?? [generatedTailwind];
   const sectorTailwind = tailwindProfile[Math.min(marketEra, tailwindProfile.length - 1)];
   const productCycleLength = Math.round(clamp(430 - competitor.innovation * 1.25, 300, 420));
   const productCyclePhase = ((day + competitorSeed(competitor)) % productCycleLength) / productCycleLength;
@@ -1488,7 +1893,8 @@ function updateCompetitor(competitor: CompetitorState, day: number): CompetitorS
       competitor.marketShare * 0.00145 -
       competitor.debtRatio * 0.06 +
       sectorTailwind +
-      productCycleEffect,
+      productCycleEffect +
+      subsidiaryGrowthBonus,
     -0.12,
     0.3,
   );
@@ -1496,7 +1902,7 @@ function updateCompetitor(competitor: CompetitorState, day: number): CompetitorS
   const dailyGrowth = (1 + growth) ** (1 / DAYS_PER_YEAR) - 1;
   const revenue = Math.max(25_000, competitor.revenue * (1 + dailyGrowth));
   const marginTarget = clamp(
-    0.03 + competitor.brand * 0.001 + competitor.innovation * 0.0006 + growth * 0.25 + productCycleEffect * 0.18 - competitor.debtRatio * 0.11 + (competitor.id === "softunion" ? 0.07 : 0),
+    0.03 + competitor.brand * 0.001 + competitor.innovation * 0.0006 + growth * 0.25 + productCycleEffect * 0.18 - competitor.debtRatio * 0.11 + (competitor.id === "softunion" ? 0.07 : 0) + subsidiaryMarginBonus,
     -0.18,
     0.3,
   );
@@ -1584,7 +1990,7 @@ function updateCompetitor(competitor: CompetitorState, day: number): CompetitorS
   } else if (growth < 0) {
     lastReason = "Schrumpfender Umsatz senkt die fundamentale Bewertung.";
   }
-  if (financialHealth <= 0.01 || (price <= 0.015 && profitMargin < 0)) {
+  if (!isSubsidiary && (financialHealth <= 0.01 || (price <= 0.015 && profitMargin < 0))) {
     return {
       ...competitor,
       status: "bankrupt",
@@ -1645,22 +2051,29 @@ function closeMonth(state: GameState) {
   const revenue = state.monthlyRevenue;
   const expenses = state.monthlyExpenses;
   const investmentIncome = getEstimatedMonthlyPortfolioIncome(state);
+  const profit = revenue - expenses + investmentIncome;
   let next: GameState = {
     ...state,
     cash: state.cash + investmentIncome,
     lifetimeProfit: state.lifetimeProfit + investmentIncome,
     lastMonthRevenue: revenue,
+    lastMonthProductRevenue: state.monthlyProductRevenue,
+    lastMonthContractRevenue: state.monthlyContractRevenue,
     lastMonthExpenses: expenses,
     lastMonthInvestmentIncome: investmentIncome,
     monthlyRevenue: 0,
+    monthlyProductRevenue: 0,
+    monthlyContractRevenue: 0,
     monthlyExpenses: 0,
     history: compactCompanyHistory([
       ...state.history,
       {
         day: state.day,
         revenue,
+        productRevenue: state.monthlyProductRevenue,
+        contractRevenue: state.monthlyContractRevenue,
         expenses,
-        profit: revenue - expenses + investmentIncome,
+        profit,
         valuation: state.valuation,
         cash: state.cash + investmentIncome,
         debt: state.debt,
@@ -1689,23 +2102,80 @@ function closeMonth(state: GameState) {
 }
 
 function simulateOneDay(state: GameState) {
-  const day = state.day + 1;
-  const workingState = { ...state, day };
+  const preparedState = acceptAutomaticEnterpriseContracts(state);
+  const day = preparedState.day + 1;
+  const sanitizedProducts = (Array.isArray(preparedState.products) ? preparedState.products : []).map((product) => ({
+    ...product,
+    price: Math.max(0, finite(product.price)),
+    inventory: Math.max(0, finite(product.inventory)),
+  }));
+  const contractPricingState = { ...preparedState, products: sanitizedProducts };
+  // A single invalid persisted value must never poison the complete financial
+  // simulation. JSON serializes NaN/Infinity as null, so this also repairs
+  // saves that were written while the old contract bug was active.
+  const workingState: GameState = {
+    ...preparedState,
+    day,
+    cash: finite(preparedState.cash),
+    debt: Math.max(0, finite(preparedState.debt)),
+    lifetimeRevenue: Math.max(0, finite(preparedState.lifetimeRevenue)),
+    lifetimeProfit: finite(preparedState.lifetimeProfit),
+    monthlyRevenue: Math.max(0, finite(preparedState.monthlyRevenue)),
+    monthlyProductRevenue: Math.max(0, finite(preparedState.monthlyProductRevenue)),
+    monthlyContractRevenue: Math.max(0, finite(preparedState.monthlyContractRevenue)),
+    monthlyExpenses: Math.max(0, finite(preparedState.monthlyExpenses)),
+    lastMonthRevenue: Math.max(0, finite(preparedState.lastMonthRevenue)),
+    lastMonthProductRevenue: Math.max(0, finite(preparedState.lastMonthProductRevenue)),
+    lastMonthContractRevenue: Math.max(0, finite(preparedState.lastMonthContractRevenue)),
+    lastMonthExpenses: Math.max(0, finite(preparedState.lastMonthExpenses)),
+    products: sanitizedProducts,
+    enterpriseContracts: (Array.isArray(preparedState.enterpriseContracts) ? preparedState.enterpriseContracts : []).map((contract) => {
+      const totalDays = Math.max(1, positiveInteger(contract.totalDays, 1));
+      const totalUnits = Math.max(1, finite(contract.totalUnits, 1));
+      const product = sanitizedProducts.find((candidate) => candidate.id === contract.productId);
+      const balancedUnitPrice = product
+        ? getEnterpriseContractUnitPrice(contractPricingState, Math.max(0, finite(contract.unitPrice)), product)
+        : Math.max(0, finite(contract.unitPrice));
+      return {
+        ...contract,
+        totalDays,
+        daysRemaining: Math.max(1, positiveInteger(contract.daysRemaining, totalDays)),
+        totalUnits,
+        fulfilledUnits: clamp(finite(contract.fulfilledUnits), 0, totalUnits),
+        unitPrice: balancedUnitPrice,
+        minimumQuality: Math.max(0, finite(contract.minimumQuality)),
+        lastDelivery: Math.max(0, finite(contract.lastDelivery)),
+      };
+    }),
+  };
   const activeProducts = workingState.products.filter(
     (product) => product.active && resolveProductBlueprint(product),
   );
   const marketMetrics = calculateProductMarketMetrics(workingState);
   const demandEntries = activeProducts.map((product) => {
     const blueprint = resolveProductBlueprint(product)!;
-    const demand = marketMetrics.get(product.id)?.demand ?? 0;
+    const consumerDemand = marketMetrics.get(product.id)?.demand ?? 0;
+    const quality = getProductQuality(workingState, product, blueprint);
+    const contractTargets = workingState.enterpriseContracts
+      .filter((contract) => contract.productId === product.id && quality >= contract.minimumQuality)
+      .map((contract) => ({
+        contract,
+        target: getContractDailyTarget(contract),
+        remaining: Math.max(0, contract.totalUnits - contract.fulfilledUnits),
+      }))
+      .sort((left, right) => left.contract.daysRemaining - right.contract.daysRemaining);
+    const contractDemand = contractTargets.reduce((sum, entry) => sum + entry.remaining, 0);
+    const requiredContractDelivery = contractTargets.reduce((sum, entry) => sum + entry.target, 0);
+    const demand = consumerDemand + contractDemand;
+    const reportedDemand = consumerDemand + requiredContractDelivery;
     const automaticTarget = demand * 1.08 + Math.max(0, demand * 2.5 - product.inventory) * 0.14;
     const productionTarget = product.productionTarget === null
       ? automaticTarget
       : clamp(finite(product.productionTarget), 0, 5_000_000);
-    return { product, blueprint, demand, productionTarget };
+    return { product, blueprint, demand, reportedDemand, consumerDemand, contractDemand, contractTargets, productionTarget };
   });
-  const totalDemand = demandEntries.reduce(
-    (total, entry) => total + entry.demand,
+  const totalConsumerDemand = demandEntries.reduce(
+    (total, entry) => total + entry.consumerDemand,
     0,
   );
   const salesCapacity = getDailySalesCapacity(workingState);
@@ -1720,61 +2190,114 @@ function simulateOneDay(state: GameState) {
     (total, entry) => total + entry.productionTarget,
     0,
   );
-  const productionPlans = new Map(demandEntries.map((entry) => {
-    const storageShare = totalProductionTarget > 0
+  const productionPlans = new Map(demandEntries.map((entry) => [entry.product.id, 0]));
+  let remainingProductionCapacity = capacity;
+  const allocateProductionStage = (desiredAmounts: Map<string, number>) => {
+    const feasible = demandEntries.map((entry) => {
+      const planned = productionPlans.get(entry.product.id) ?? 0;
+      return [entry.product.id, Math.max(0, Math.min(
+        desiredAmounts.get(entry.product.id) ?? 0,
+        entry.productionTarget - planned,
+      ))] as const;
+    });
+    const totalDesired = feasible.reduce((sum, [, amount]) => sum + amount, 0);
+    const scale = totalDesired > 0 ? Math.min(1, remainingProductionCapacity / totalDesired) : 0;
+    for (const [productId, amount] of feasible) {
+      productionPlans.set(productId, (productionPlans.get(productId) ?? 0) + amount * scale);
+    }
+    remainingProductionCapacity = Math.max(0, remainingProductionCapacity - totalDesired * scale);
+  };
+  // 1. Endkundennachfrage, 2. Firmenaufträge, 3. zusätzlicher Lageraufbau.
+  allocateProductionStage(new Map(demandEntries.map((entry) => [
+    entry.product.id,
+    totalConsumerDemand > 0
+      ? Math.min(entry.consumerDemand, salesCapacity * (entry.consumerDemand / totalConsumerDemand))
+      : 0,
+  ])));
+  allocateProductionStage(new Map(demandEntries.map((entry) => [entry.product.id, entry.contractDemand])));
+  allocateProductionStage(new Map(demandEntries.map((entry) => [
+    entry.product.id,
+    totalProductionTarget > 0
       ? warehouseSpace * (entry.productionTarget / totalProductionTarget)
-      : 0;
-    const expectedSales = totalDemand > 0
-      ? Math.min(entry.demand, salesCapacity * (entry.demand / totalDemand))
-      : 0;
-    return [
-      entry.product.id,
-      Math.min(entry.productionTarget, expectedSales + storageShare),
-    ];
-  }));
-  const totalFeasibleProduction = [...productionPlans.values()].reduce(
-    (total, amount) => total + amount,
-    0,
-  );
-  const productionScale = totalFeasibleProduction > 0
-    ? Math.min(1, capacity / totalFeasibleProduction)
-    : 0;
+      : 0,
+  ])));
   let productRevenue = 0;
+  let contractRevenue = 0;
   let productionExpenses = 0;
   let totalSales = 0;
   let totalProduction = 0;
+  let totalReturns = 0;
+  let warrantyExpenses = 0;
+  const contractDeliveries = new Map<string, number>();
   const products = workingState.products.map((product) => {
     const entry = demandEntries.find((candidate) => candidate.product.id === product.id);
     if (!entry) {
-      return { ...product, lastDemand: 0, lastProduction: 0, lastSales: 0, lastLostSales: 0 };
+      return { ...product, lastDemand: 0, lastProduction: 0, lastSales: 0, lastContractSales: 0, lastLostSales: 0, lastReturns: 0 };
     }
-    const production = (productionPlans.get(product.id) ?? 0) * productionScale;
+    const production = productionPlans.get(product.id) ?? 0;
     const available = product.inventory + production;
-    const salesAllocation = totalDemand > 0
-      ? salesCapacity * (entry.demand / totalDemand)
+    const salesAllocation = totalConsumerDemand > 0
+      ? salesCapacity * (entry.consumerDemand / totalConsumerDemand)
       : 0;
-    const sales = Math.max(0, Math.min(entry.demand, available, salesAllocation));
-    const revenue = sales * product.price;
+    const consumerSales = Math.max(0, Math.min(entry.consumerDemand, available, salesAllocation));
+    let availableForDelivery = available - consumerSales;
+    let contractSales = 0;
+    let productContractRevenue = 0;
+    for (const target of entry.contractTargets) {
+      const delivery = Math.min(target.remaining, availableForDelivery);
+      contractDeliveries.set(target.contract.id, delivery);
+      productContractRevenue += delivery * target.contract.unitPrice;
+      contractSales += delivery;
+      availableForDelivery -= delivery;
+    }
+    const sales = contractSales + consumerSales;
+    const consumerRevenue = consumerSales * product.price;
     const unitCost = getUnitCost(workingState, entry.blueprint, product);
-    productRevenue += revenue;
+    const returnRate = getProductWarrantyRate(workingState, product);
+    const returns = sales * returnRate;
+    const warrantyCost = returns * unitCost * 0.45;
+    productRevenue += consumerRevenue;
+    contractRevenue += productContractRevenue;
     productionExpenses += production * unitCost;
+    warrantyExpenses += warrantyCost;
     totalSales += sales;
     totalProduction += production;
+    totalReturns += returns;
     return {
       ...product,
       inventory: Math.min(warehouseCapacity, Math.max(0, available - sales)),
-      lastDemand: entry.demand,
+      lastDemand: entry.reportedDemand,
       lastProduction: production,
       lastSales: sales,
-      lastLostSales: Math.max(0, entry.demand - sales),
+      lastContractSales: contractSales,
+      lastLostSales: Math.max(0, entry.reportedDemand - sales),
+      lastReturns: returns,
     };
   });
   const payroll = getDailyPayroll(workingState);
   const marketing = getDailyMarketingCost(workingState);
+  const maintenance = Math.max(0, workingState.maintenanceBudget);
   const interest = (workingState.debt * getAnnualInterestRate(workingState)) / DAYS_PER_YEAR;
-  const consolidated = getConsolidatedBusiness(workingState);
-  const revenue = productRevenue + consolidated.revenue;
-  const expenses = productionExpenses + payroll + marketing + interest + consolidated.expenses;
+  const consolidated = getDailyConsolidatedBusiness(workingState);
+  const contractResults = workingState.enterpriseContracts.map((contract) => {
+    const delivery = contractDeliveries.get(contract.id) ?? 0;
+    const fulfilledUnits = contract.fulfilledUnits + delivery;
+    const remainingUnits = Math.max(0, contract.totalUnits - fulfilledUnits);
+    const completed = remainingUnits <= 0.001;
+    const deadlineReached = contract.daysRemaining <= 1;
+    return {
+      contract,
+      delivery,
+      fulfilledUnits,
+      remainingUnits,
+      completed,
+      deadlineReached,
+      penalty: deadlineReached && !completed ? remainingUnits * contract.unitPrice * 0.08 : 0,
+    };
+  });
+  const contractPenalty = contractResults.reduce((sum, result) => sum + result.penalty, 0);
+  const revenue = productRevenue + contractRevenue + consolidated.revenue;
+  const expenses = productionExpenses + warrantyExpenses + payroll + marketing + maintenance + interest + consolidated.expenses + contractPenalty;
   const profit = revenue - expenses;
   const cashBeforeDebtRepayment = workingState.cash + profit;
   const debtRepayment = Math.min(
@@ -1797,12 +2320,46 @@ function simulateOneDay(state: GameState) {
     lifetimeRevenue: workingState.lifetimeRevenue + revenue,
     lifetimeProfit: workingState.lifetimeProfit + profit,
     monthlyRevenue: workingState.monthlyRevenue + revenue,
+    monthlyProductRevenue: workingState.monthlyProductRevenue + productRevenue,
+    monthlyContractRevenue: workingState.monthlyContractRevenue + contractRevenue,
     monthlyExpenses: workingState.monthlyExpenses + expenses,
     lastDayRevenue: revenue,
+    lastDayProductRevenue: productRevenue,
+    lastDayContractRevenue: contractRevenue,
     lastDayExpenses: expenses,
     researchPoints: workingState.researchPoints + researchRate,
+    enterpriseContracts: contractResults
+      .filter((result) => !result.completed && !result.deadlineReached)
+      .map((result) => ({
+        ...result.contract,
+        daysRemaining: result.contract.daysRemaining - 1,
+        fulfilledUnits: result.fulfilledUnits,
+        lastDelivery: result.delivery,
+      })),
     competitors,
   };
+
+  for (const result of contractResults) {
+    if (result.completed) {
+      next = addNews(next, {
+        id: `contract-complete-${result.contract.id}-${day}`,
+        day,
+        title: `${result.contract.clientName}: Auftrag erfüllt`,
+        body: `${Math.round(result.contract.totalUnits).toLocaleString("de-DE")} Geräte wurden vollständig geliefert.`,
+        category: "company",
+        tone: "positive",
+      });
+    } else if (result.deadlineReached) {
+      next = addNews(next, {
+        id: `contract-missed-${result.contract.id}-${day}`,
+        day,
+        title: `${result.contract.clientName}: Lieferfrist verfehlt`,
+        body: `${Math.ceil(result.remainingUnits).toLocaleString("de-DE")} Geräte fehlen. Die Vertragsstrafe beträgt ${formatCompactMoney(result.penalty)}.`,
+        category: "company",
+        tone: "warning",
+      });
+    }
+  }
 
   for (const competitor of bankruptcies) {
     const lostInvestment = competitor.ownedShares * competitor.averageCost;
@@ -1855,11 +2412,16 @@ function simulateOneDay(state: GameState) {
   const addressableRevenue = getDailyPcMarketSize(next) * 1_100;
   const brandInvestment = Math.log1p(
     Math.max(0, next.marketingBudget) / Math.max(5_000, addressableRevenue * 0.0025),
-  ) * 0.009 * getMarketingEfficiency(next);
+  ) * 0.009 * getMarketingEfficiency(next) * MARKETING_FOCUSES[next.marketingFocus].brand;
+  const returnReputationImpact = next.marketingFocus === "loyalty" ? 0.018 : 0.035;
   const brandDrift =
     clamp(brandInvestment, 0, 0.025) +
     (totalSales > 0 ? 0.001 : -0.002) -
-    next.brand * 0.00008;
+    next.brand * 0.00008 -
+    totalReturns / Math.max(1, totalSales) * returnReputationImpact;
+  const requiredMaintenance = Math.max(250, 260 * workingState.factoryLevel ** 1.3 * (1 + workingState.automationLevel * 0.12));
+  const maintenanceCoverage = clamp(workingState.maintenanceBudget / requiredMaintenance, 0, 2);
+  const conditionChange = maintenanceCoverage * 0.075 - utilization * 0.065 - 0.006;
   const demandShareTarget =
     (totalSales / Math.max(1, getDailyPcMarketSize(next))) * 100;
   const marketShareGap = clamp(demandShareTarget, 0.0001, 95) - next.marketShare;
@@ -1868,6 +2430,7 @@ function simulateOneDay(state: GameState) {
     ...next,
     morale: clamp(next.morale + (moraleTarget - next.morale) * 0.012, 0, 100),
     brand: clamp(next.brand + brandDrift, 0, 100),
+    factoryCondition: clamp(next.factoryCondition + conditionChange, 20, 100),
     marketShare: clamp(
       next.marketShare + marketShareAdjustment,
       0.0001,
@@ -1943,6 +2506,32 @@ function normalizeLoadedState(imported: GameState) {
   delete importedRecord.pendingEvent;
   delete importedRecord.lastEventDay;
   delete importedRecord.eventSeed;
+  for (const obsolete of ["loanRateAdjustment", "staffingTargets", "autoStaffing", "monthlyPlan", "dividendPolicy", "lastDividendPaid", "investorConfidence", "capitalGuidance", "guidanceRevenueTarget"]) {
+    delete importedRecord[obsolete];
+  }
+  const legacyContracts = Array.isArray(importedRecord.enterpriseContracts)
+    ? importedRecord.enterpriseContracts
+    : importedRecord.enterpriseContract && typeof importedRecord.enterpriseContract === "object"
+      ? [importedRecord.enterpriseContract]
+      : [];
+  const importedContracts = legacyContracts.map((value) => ({ ...value } as Record<string, unknown>));
+  for (const importedContract of importedContracts) {
+    const contractDays = Math.max(1, finite(Number(importedContract.totalDays), finite(Number(importedContract.durationDays), 1)));
+    const legacyDailyUnits = Math.max(0, finite(Number(importedContract.unitsPerDay)));
+    importedContract.totalDays = contractDays;
+    importedContract.daysRemaining = Math.max(1, finite(Number(importedContract.daysRemaining), contractDays));
+    importedContract.totalUnits = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, finite(Number(importedContract.totalUnits), legacyDailyUnits * contractDays || 1)));
+    importedContract.fulfilledUnits = clamp(Math.max(0, finite(Number(importedContract.fulfilledUnits))), 0, Number(importedContract.totalUnits));
+    importedContract.unitPrice = Math.max(0, finite(Number(importedContract.unitPrice)));
+    importedContract.minimumQuality = Math.max(0, finite(Number(importedContract.minimumQuality)));
+    importedContract.lastDelivery = Math.max(0, finite(Number(importedContract.lastDelivery), finite(Number(importedContract.lastFulfilled))));
+    delete importedContract.unitsPerDay;
+    delete importedContract.lastFulfilled;
+    delete importedContract.durationDays;
+    delete importedContract.previousSalesChannel;
+  }
+  importedRecord.enterpriseContracts = importedContracts;
+  delete importedRecord.enterpriseContract;
   const cleanImported = importedRecord as unknown as GameState;
   const employees = { ...base.employees, ...(imported.employees ?? {}) };
   const departmentLevels = { ...base.departmentLevels, ...(imported.departmentLevels ?? {}) };
@@ -1966,15 +2555,9 @@ function normalizeLoadedState(imported: GameState) {
     : savedSpeed;
   const sectionMap: Partial<Record<GameState["selectedSection"], GameState["selectedSection"]>> = {
     products: "builder",
-    production: "company",
-    people: "company",
-    marketing: "marketing",
-    finance: "market",
-    stocks: "market",
-    deals: "market",
   };
   const selectedSection = sectionMap[imported.selectedSection] ?? imported.selectedSection;
-  const validSections: GameState["selectedSection"][] = ["dashboard", "accounting", "builder", "research", "company", "marketing", "market"];
+  const validSections: GameState["selectedSection"][] = ["dashboard", "accounting", "builder", "research", "company", "production", "people", "marketing", "market", "finance", "stocks", "deals"];
   const normalized = {
     ...base,
     ...cleanImported,
@@ -1984,8 +2567,23 @@ function normalizeLoadedState(imported: GameState) {
     day: positiveInteger(imported.day),
     speed: resumedSpeed,
     previousSpeed,
+    difficulty: DIFFICULTY_SETTINGS[imported.difficulty] ? imported.difficulty : base.difficulty,
     cash: finite(imported.cash, base.cash),
     debt: Math.max(0, finite(imported.debt)),
+    lifetimeRevenue: Math.max(0, finite(imported.lifetimeRevenue)),
+    lifetimeProfit: finite(imported.lifetimeProfit),
+    monthlyRevenue: Math.max(0, finite(imported.monthlyRevenue)),
+    monthlyProductRevenue: Math.max(0, finite(imported.monthlyProductRevenue, imported.monthlyRevenue)),
+    monthlyContractRevenue: Math.max(0, finite(imported.monthlyContractRevenue)),
+    monthlyExpenses: Math.max(0, finite(imported.monthlyExpenses)),
+    lastMonthRevenue: Math.max(0, finite(imported.lastMonthRevenue)),
+    lastMonthProductRevenue: Math.max(0, finite(imported.lastMonthProductRevenue, imported.lastMonthRevenue)),
+    lastMonthContractRevenue: Math.max(0, finite(imported.lastMonthContractRevenue)),
+    lastMonthExpenses: Math.max(0, finite(imported.lastMonthExpenses)),
+    lastDayRevenue: Math.max(0, finite(imported.lastDayRevenue)),
+    lastDayProductRevenue: Math.max(0, finite(imported.lastDayProductRevenue, imported.lastDayRevenue)),
+    lastDayContractRevenue: Math.max(0, finite(imported.lastDayContractRevenue)),
+    lastDayExpenses: Math.max(0, finite(imported.lastDayExpenses)),
     dailyDebtRepayment: Math.max(
       0,
       finite(
@@ -2012,16 +2610,35 @@ function normalizeLoadedState(imported: GameState) {
     departmentLevels: Object.fromEntries(
       (Object.keys(DEPARTMENTS) as DepartmentId[]).map((department) => [department, Math.max(1, positiveInteger(departmentLevels[department], 1))]),
     ) as GameState["departmentLevels"],
+    factoryCondition: clamp(finite(imported.factoryCondition, 100), 20, 100),
+    maintenanceBudget: Math.max(0, finite(imported.maintenanceBudget, base.maintenanceBudget)),
+    qualityFocus: clamp(finite(imported.qualityFocus, base.qualityFocus), 0.7, 1.3),
+    marketingBudget: Math.max(0, finite(imported.marketingBudget, base.marketingBudget)),
+    productGenerations: { ...base.productGenerations, ...(imported.productGenerations ?? {}) },
+    marketingFocus: MARKETING_FOCUSES[imported.marketingFocus] ? imported.marketingFocus : base.marketingFocus,
+    marketingTarget: ["all", "budget", "mainstream", "performance"].includes(imported.marketingTarget) ? imported.marketingTarget : base.marketingTarget,
+    enterpriseContracts: (cleanImported.enterpriseContracts ?? []).map((contract) => ({
+      ...contract,
+      totalDays: Math.max(1, positiveInteger(contract.totalDays, 1)),
+      daysRemaining: Math.max(1, positiveInteger(contract.daysRemaining, contract.totalDays || 1)),
+      totalUnits: Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, finite(contract.totalUnits, 1))),
+      fulfilledUnits: clamp(Math.max(0, finite(contract.fulfilledUnits)), 0, Math.max(1, finite(contract.totalUnits, 1))),
+      unitPrice: Math.max(0, finite(contract.unitPrice)),
+      minimumQuality: Math.max(0, finite(contract.minimumQuality)),
+      lastDelivery: Math.max(0, finite(contract.lastDelivery)),
+    })),
     unlockedTech: [...new Set((imported.unlockedTech ?? base.unlockedTech).filter((id) => Boolean(getTech(id))))],
     unlockedParts: [...new Set((imported.unlockedParts ?? base.unlockedParts).filter((id) => typeof id === "string"))],
     componentResearch,
     currentResearch,
     autoResearch: imported.autoResearch === true,
+    autoAcceptContracts: imported.autoAcceptContracts === true,
     selectedSection: validSections.includes(selectedSection) ? selectedSection : "dashboard",
     products: (imported.products ?? base.products).map((product) => {
       const cleanProduct = { ...product } as ProductState & Record<string, unknown>;
       delete cleanProduct.unitsSold;
       delete cleanProduct.lifetimeRevenue;
+      delete cleanProduct.salesChannel;
       return {
         ...cleanProduct,
         productionTarget: imported.version < 7
@@ -2032,7 +2649,10 @@ function normalizeLoadedState(imported: GameState) {
         lastDemand: Math.max(0, finite(product.lastDemand)),
         lastProduction: Math.max(0, finite(product.lastProduction)),
         lastSales: Math.max(0, finite(product.lastSales)),
+        lastContractSales: Math.max(0, finite(product.lastContractSales)),
         lastLostSales: Math.max(0, finite(product.lastLostSales)),
+        lastReturns: Math.max(0, finite(product.lastReturns)),
+        generation: Math.max(1, positiveInteger(product.generation, 1)),
           configuration: product.configuration
             ? normalizePcConfiguration(product.configuration)
             : undefined,
@@ -2052,6 +2672,8 @@ function normalizeLoadedState(imported: GameState) {
       base.history[0],
       ...(imported.history ?? base.history).map((point) => ({
         ...point,
+        productRevenue: Math.max(0, finite(point.productRevenue ?? point.revenue, point.revenue)),
+        contractRevenue: Math.max(0, finite(point.contractRevenue ?? 0)),
         debt: finite(point.debt),
         marketShare: finite(point.marketShare, imported.marketShare),
         employees: positiveInteger(point.employees, getEmployeeCount(imported)),
@@ -2161,7 +2783,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       next = applyOperatingExpense(state, blueprint.developmentCost);
       next = {
         ...next,
-        products: [...next.products, { id: `product-${blueprint.id}`, blueprintId: blueprint.id, name: blueprint.name, price: roundMoney(blueprint.basePrice * priceFactor), launchedDay: state.day, inventory: 0, active: true, qualityBonus: 0, lastDemand: 0, lastProduction: 0, lastSales: 0, productionTarget: Math.ceil(blueprint.baseDemand), lastLostSales: 0 }],
+        products: [...next.products, { id: `product-${blueprint.id}`, blueprintId: blueprint.id, name: blueprint.name, price: roundMoney(blueprint.basePrice * priceFactor), launchedDay: state.day, inventory: 0, active: true, qualityBonus: 0, lastDemand: 0, lastProduction: 0, lastSales: 0, lastContractSales: 0, productionTarget: Math.ceil(blueprint.baseDemand), lastLostSales: 0, lastReturns: 0, generation: 1 }],
       };
       next = addNews(next, { id: `launch-${blueprint.id}-${state.day}`, day: state.day, title: `${blueprint.name} kommt auf den Markt`, body: blueprint.tagline, category: "product", tone: "positive" });
       break;
@@ -2188,6 +2810,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const price = roundMoney(clamp(action.price, minimumPrice, build.suggestedPrice * 3));
       if (!Number.isFinite(action.price) || price < minimumPrice) return state;
       const productId = `pc-${state.day}-${state.saveRevision + 1}`;
+      const predecessor = state.products
+        .filter((product) => product.active && getProductSegment(product) === marketSegment)
+        .sort((left, right) => right.generation - left.generation)[0];
+      const generation = state.productGenerations[marketSegment] + 1;
       next = applyOperatingExpense(state, build.developmentCost);
       next = {
         ...next,
@@ -2207,10 +2833,18 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
             lastDemand: 0,
             lastProduction: 0,
             lastSales: 0,
+            lastContractSales: 0,
             productionTarget: null,
             lastLostSales: 0,
+            lastReturns: 0,
+            generation,
+            predecessorId: predecessor?.id,
           },
         ],
+        productGenerations: {
+          ...next.productGenerations,
+          [marketSegment]: generation,
+        },
       };
       next = addNews(next, {
         id: `launch-${productId}`,
@@ -2224,7 +2858,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     }
     case "RETIRE_PRODUCT": {
       if (!state.products.some((product) => product.id === action.productId && product.active)) return state;
-      next = { ...state, products: state.products.map((product) => product.id === action.productId ? { ...product, active: false, lastDemand: 0, lastProduction: 0, lastSales: 0, lastLostSales: 0 } : product) };
+      if (state.enterpriseContracts.some((contract) => contract.productId === action.productId)) return state;
+      next = { ...state, products: state.products.map((product) => product.id === action.productId ? { ...product, active: false, lastDemand: 0, lastProduction: 0, lastSales: 0, lastContractSales: 0, lastLostSales: 0 } : product) };
       break;
     }
     case "SET_PRODUCT_PRICE": {
@@ -2258,6 +2893,28 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
           candidate.id === product.id ? { ...candidate, productionTarget } : candidate,
         ),
       };
+      break;
+    }
+    case "SET_MAINTENANCE_BUDGET": {
+      const maintenanceBudget = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.round(finite(action.value))));
+      if (maintenanceBudget === state.maintenanceBudget) return state;
+      next = { ...state, maintenanceBudget };
+      break;
+    }
+    case "SET_AUTO_ACCEPT_CONTRACTS": {
+      if (state.autoAcceptContracts === action.enabled) return state;
+      next = { ...state, autoAcceptContracts: action.enabled };
+      break;
+    }
+    case "ACCEPT_ENTERPRISE_CONTRACT": {
+      const offer = getEnterpriseContractOffers(state).find((candidate) => candidate.id === action.offerId);
+      if (isEnterpriseContractOfferUsed(state, action.offerId)) return state;
+      const product = state.products.find((candidate) => candidate.id === action.productId && candidate.active);
+      const blueprint = product ? resolveProductBlueprint(product) : undefined;
+      if (!offer || !product || !blueprint || getProductSegment(product) !== offer.segment || getProductQuality(state, product, blueprint) < offer.minimumQuality) return state;
+      const unitPrice = getEnterpriseContractUnitPrice(state, offer.unitPrice, product);
+      if (unitPrice <= 0) return state;
+      next = appendEnterpriseContract(state, { ...offer, unitPrice }, product);
       break;
     }
     case "UPGRADE_FACTORY": {
@@ -2299,6 +2956,14 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case "SET_MARKETING_STRATEGY":
       if (action.strategy === state.marketingStrategy) return state;
       next = { ...state, marketingStrategy: action.strategy };
+      break;
+    case "SET_MARKETING_FOCUS":
+      if (!MARKETING_FOCUSES[action.focus] || action.focus === state.marketingFocus) return state;
+      next = { ...state, marketingFocus: action.focus };
+      break;
+    case "SET_MARKETING_TARGET":
+      if (!["all", "budget", "mainstream", "performance"].includes(action.target) || action.target === state.marketingTarget) return state;
+      next = { ...state, marketingTarget: action.target };
       break;
     case "START_CAMPAIGN": {
       const campaign = CAMPAIGNS.find((candidate) => candidate.id === action.campaignId);
@@ -2407,24 +3072,79 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const competitor = state.competitors.find((candidate) => candidate.id === action.competitorId);
       if (!competitor || competitor.status !== "active") return state;
       const cost = getAcquisitionPrice(competitor);
-      if (state.cash < cost || state.marketShare + competitor.marketShare > 60) return state;
-      next = { ...state, cash: state.cash - cost, competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, status: "acquired", ownedShares: candidate.sharesOutstanding } : candidate) };
-      next = applyAcquisitionPerk(next, competitor.id);
+      if (state.cash < cost) return state;
+      const totalBasis = competitor.ownedShares * competitor.averageCost + cost;
+      next = { ...state, cash: state.cash - cost, competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, status: "acquired", ownedShares: candidate.sharesOutstanding, averageCost: totalBasis / Math.max(1, candidate.sharesOutstanding), acquisitionIntegrated: true } : candidate) };
+      if (!competitor.acquisitionIntegrated) next = applyAcquisitionPerk(next, competitor.id);
       next = addNews(next, { id: `acquisition-${competitor.id}-${state.day}`, day: state.day, title: `${competitor.name} wird übernommen`, body: `Der Kaufpreis beträgt ${formatCompactMoney(cost)}. ${competitor.acquisitionPerk}.`, category: "finance", tone: "positive" });
       break;
     }
     case "MERGE_COMPETITOR": {
       const competitor = state.competitors.find((candidate) => candidate.id === action.competitorId);
       const terms = competitor ? getMergerTerms(state, competitor) : null;
-      if (!competitor || !terms || getCompanyControl(state).percentage < 33.4 || state.cash < terms.cashCost || state.marketShare + competitor.marketShare > 60) return state;
+      if (!competitor || !terms || getCompanyControl(state).percentage < 33.4 || state.cash < terms.cashCost) return state;
       const combinedValue = Math.max(250_000, state.valuation + competitor.fairValue * competitor.sharesOutstanding - terms.cashCost);
-      next = { ...state, cash: state.cash - terms.cashCost, totalShares: state.totalShares + terms.newShares, valuation: combinedValue, sharePrice: combinedValue / (state.totalShares + terms.newShares), competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, status: "merged", ownedShares: candidate.sharesOutstanding } : candidate) };
-      next = applyAcquisitionPerk(next, competitor.id);
+      const totalBasis = competitor.ownedShares * competitor.averageCost + terms.totalPrice;
+      next = { ...state, cash: state.cash - terms.cashCost, totalShares: state.totalShares + terms.newShares, valuation: combinedValue, sharePrice: combinedValue / (state.totalShares + terms.newShares), competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? { ...candidate, status: "merged", ownedShares: candidate.sharesOutstanding, averageCost: totalBasis / Math.max(1, candidate.sharesOutstanding), acquisitionIntegrated: true } : candidate) };
+      if (!competitor.acquisitionIntegrated) next = applyAcquisitionPerk(next, competitor.id);
       next = addNews(next, { id: `merger-${competitor.id}-${state.day}`, day: state.day, title: `Fusion mit ${competitor.name}`, body: `${formatCompactMoney(terms.cashCost)} werden bar bezahlt; neue Aktien finanzieren den Rest.`, category: "finance", tone: "positive" });
+      break;
+    }
+    case "DIVEST_COMPETITOR": {
+      const competitor = state.competitors.find((candidate) => candidate.id === action.competitorId);
+      if (!competitor || (competitor.status !== "acquired" && competitor.status !== "merged")) return state;
+      const quote = getSubsidiaryExitQuote(competitor);
+      const basis = competitor.ownedShares * competitor.averageCost;
+      next = {
+        ...state,
+        cash: state.cash + quote.directSaleProceeds,
+        competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? {
+          ...candidate,
+          status: "active",
+          price: quote.referencePrice,
+          ownedShares: 0,
+          averageCost: 0,
+          realizedProfit: candidate.realizedProfit + quote.directSaleProceeds - basis,
+          lastReason: "Nach dem Verkauf agiert das Unternehmen wieder als unabhängiger Wettbewerber.",
+        } : candidate),
+      };
+      next = addNews(next, { id: `divest-${competitor.id}-${state.day}`, day: state.day, title: `${competitor.name} verkauft`, body: `${formatCompactMoney(quote.directSaleProceeds)} fließen aus dem Unternehmensverkauf in die Kasse.`, category: "finance", tone: "neutral" });
+      break;
+    }
+    case "RELIST_COMPETITOR": {
+      const competitor = state.competitors.find((candidate) => candidate.id === action.competitorId);
+      if (!competitor || (competitor.status !== "acquired" && competitor.status !== "merged")) return state;
+      const quote = getSubsidiaryExitQuote(competitor);
+      const soldBasis = quote.ipoSoldShares * competitor.averageCost;
+      next = {
+        ...state,
+        cash: state.cash + quote.ipoProceeds,
+        competitors: state.competitors.map((candidate) => candidate.id === competitor.id ? {
+          ...candidate,
+          status: "active",
+          price: quote.ipoPrice,
+          ownedShares: quote.ipoRetainedShares,
+          averageCost: quote.ipoRetainedShares > 0 ? candidate.averageCost : 0,
+          realizedProfit: candidate.realizedProfit + quote.ipoProceeds - soldBasis,
+          lastReason: "Der Börsengang schafft einen neuen Streubesitz; die frühere Mutter bleibt beteiligt.",
+        } : candidate),
+      };
+      next = addNews(next, { id: `relist-${competitor.id}-${state.day}`, day: state.day, title: `${competitor.name} kehrt an die Börse zurück`, body: `${formatCompactMoney(quote.ipoProceeds)} Emissionserlös; 30 % bleiben als strategische Beteiligung im Portfolio.`, category: "finance", tone: "positive" });
       break;
     }
     case "ACTIVATE_DEFENSE": {
       return state;
+    }
+    case "SET_DIFFICULTY": {
+      if (state.day > 0 || !DIFFICULTY_SETTINGS[action.difficulty]) return state;
+      const previousStart = DIFFICULTY_SETTINGS[state.difficulty].startingCash;
+      const nextStart = DIFFICULTY_SETTINGS[action.difficulty].startingCash;
+      next = {
+        ...state,
+        difficulty: action.difficulty,
+        cash: Math.max(0, state.cash - previousStart + nextStart),
+      };
+      break;
     }
     case "DISMISS_ONBOARDING":
       if (state.onboardingDismissed) return state;

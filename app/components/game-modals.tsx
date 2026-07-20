@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode } from "react";
-import type { GameAction, SimulationSummary } from "@/app/game/types";
+import type { GameAction, GameDifficulty, SimulationSummary } from "@/app/game/types";
+import { DIFFICULTY_SETTINGS } from "@/app/game/engine";
 import { Icon } from "./icons";
 import { ActionButton, StatusBadge } from "./game-ui";
 
@@ -55,6 +56,7 @@ function ModalFrame({
 }
 
 export function OnboardingModal({ dispatch }: { dispatch: Dispatch<GameAction> }) {
+  const [difficulty, setDifficulty] = useState<GameDifficulty>("realistic");
   return (
     <ModalFrame width="max-w-2xl">
       <div className="relative overflow-hidden border-b border-slate-200 px-6 pt-8 pb-7 sm:px-9 sm:pt-10">
@@ -97,6 +99,30 @@ export function OnboardingModal({ dispatch }: { dispatch: Dispatch<GameAction> }
           </div>
         ))}
       </div>
+      <div className="border-t border-slate-200 px-5 py-5 sm:px-8">
+        <p className="text-[0.62rem] font-semibold tracking-[0.12em] text-slate-500 uppercase">Schwierigkeitsgrad</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {(Object.keys(DIFFICULTY_SETTINGS) as GameDifficulty[]).map((id) => {
+            const option = DIFFICULTY_SETTINGS[id];
+            const active = difficulty === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => {
+                  setDifficulty(id);
+                  dispatch({ type: "SET_DIFFICULTY", difficulty: id });
+                }}
+                className={`rounded-lg border p-3 text-left transition-colors ${active ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}
+              >
+                <span className="block text-xs font-semibold text-slate-900">{option.name}</span>
+                <span className="mt-1 block text-[0.65rem] leading-4 text-slate-500">{option.description}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="flex flex-col-reverse items-center justify-between gap-4 border-t border-slate-200 px-6 py-5 sm:flex-row sm:px-8">
         <p className="text-center text-[0.68rem] text-slate-600 sm:text-left">
           Spielstand wird automatisch lokal in deinem Browser gespeichert.
@@ -115,42 +141,42 @@ export function GuideModal({ onClose }: { onClose: () => void }) {
     {
       icon: "monitor" as const,
       title: "1. Produkt entwickeln",
-      text: "Erforsche einzelne CPU-, GPU-, RAM-, Speicher- und Plattformwerte. Stelle danach im PC-Labor einen kompatiblen Low-End-, Mid-Range- oder High-End-PC zusammen. Ein schneller Chip braucht auch Mainboard, Netzteil und Kühlung auf passendem Niveau.",
+      text: "Erforsche einzelne Komponenten und veröffentliche neue Low-End-, Mid-Range- oder High-End-Generationen. Neue Modelle verdrängen eigene Vorgänger; ein schneller Chip braucht auch Mainboard, Netzteil und Kühlung auf passendem Niveau.",
     },
     {
       icon: "trendUp" as const,
       title: "2. Nachfrage gewinnen",
-      text: "Jedes Segment besitzt einen gemeinsamen Markt. Leistung, Preis, Qualität, Marke und Vertriebsreichweite entscheiden, welchen Anteil dein Modell gegen alle Konkurrenten erhält. Zu alte oder zu teure PCs verlieren Absatz.",
+      text: "Vergleiche deine Modelle mit den sichtbaren Konkurrenzprodukten. Technik, Preis, Qualität, Marke und Verfügbarkeit teilen die Nachfrage des gemeinsamen Marktes automatisch auf alle Anbieter auf.",
     },
     {
       icon: "production" as const,
       title: "3. Produktion ausbalancieren",
-      text: "Fabrik, Automatisierung und Produktionspersonal begrenzen gemeinsam den Ausstoß. Verkaufte Geräte können direkt ausgeliefert werden; Überschüsse belegen das Lager. Zu viel Bestand bindet Kapital, zu wenig Produktion erzeugt verlorene Verkäufe.",
+      text: "Fabrik, Automatisierung und Personal begrenzen den Ausstoß. Auslastung verschleißt die Anlage; Wartung erhält Kapazität und Qualität. Schlechte Qualität verursacht Retouren und Garantiekosten.",
     },
     {
       icon: "people" as const,
       title: "4. Unternehmen skalieren",
-      text: "Produktion, Forschung, Marketing, Vertrieb und Finanzen brauchen passende Teams und Abteilungsstufen. Sehr große Belegschaften ohne Infrastruktur kosten Geld, liefern aber kaum zusätzlichen Nutzen.",
+      text: "Stelle Personen über frei wählbare Mengen ein oder frei. Richtwerte zeigen Engpässe in Produktion, Forschung, Marketing, Vertrieb und Finanzen; Infrastruktur bleibt der Engpass großer Teams.",
     },
     {
       icon: "marketing" as const,
-      title: "5. Marke aufbauen",
-      text: "Marketing erhöht Bekanntheit und Reichweite mit abnehmendem Grenznutzen. Das sinnvolle Budget wächst mit dem adressierbaren Markt. Kampagnen helfen zeitweise, ersetzen aber kein konkurrenzfähiges Produkt.",
+      title: "5. Absatz sichern",
+      text: "Der Vertrieb verkauft verfügbare PCs automatisch bis zu seiner Kapazitätsgrenze. Großkundenverträge sichern zusätzlichen Tagesabsatz, verlangen aber Qualität und bestrafen nicht gelieferte Stückzahlen.",
     },
     {
       icon: "finance" as const,
       title: "6. Kapital finanzieren",
-      text: "Kredite erhalten deine Stimmrechte, verursachen aber Zinsen. Neue Aktien bringen Cash und besseren Kapitalmarktzugang, verwässern jedoch Kontrolle und werden mit Emissionsabschlag verkauft. Rückkäufe kosten eine Prämie, erhöhen aber Anteil und Entscheidungstempo.",
+      text: "Kredite bringen Kapital ohne Verwässerung und werden laufend verzinst und getilgt. Aktienausgaben bringen zusätzliches Cash, Rückkäufe stärken den Gründeranteil und die operative Kontrolle.",
     },
     {
       icon: "stocks" as const,
-      title: "7. Aktien investieren",
-      text: "Kurse folgen Umsatz, Marge, Wachstum, Verschuldung, Produktzyklen und Marktstimmung. Große Orders bewegen Kauf- und Verkaufskurs. Profitable Beteiligungen zahlen monatliche Dividenden; bei einer Insolvenz werden die Aktien wertlos.",
+      title: "7. Marketing steuern",
+      text: "Kombiniere Budget und Strategie mit einem Fokus auf Bekanntheit, Verkauf oder Kundenbindung. Richte Kampagnen auf alle Käufer oder gezielt auf Low-End, Mid-Range oder High-End aus.",
     },
     {
       icon: "deals" as const,
-      title: "8. Konkurrenten übernehmen",
-      text: "Bereits gehaltene Aktien reduzieren den späteren Übernahmepreis. Eine Fusion schont Cash, gibt aber neue eigene Aktien aus. Kartellrecht und dein Gründeranteil können Transaktionen blockieren.",
+      title: "8. Beteiligungen ausbauen",
+      text: "Ab 5 %, 20 % und 33,4 % entstehen Informationsrecht, strategischer Dividendenbonus und Board-Einfluss. Höhere Beteiligungen senken den Übernahmepreis; Insolvenz macht die Position wertlos.",
     },
   ];
 

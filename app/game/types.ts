@@ -28,6 +28,9 @@ export type ProductCategory =
 
 export type PricingStrategy = "value" | "balanced" | "premium";
 export type MarketingStrategy = "efficient" | "balanced" | "aggressive";
+export type MarketingFocus = "awareness" | "conversion" | "loyalty";
+export type MarketingTarget = "all" | PcMarketSegment;
+export type GameDifficulty = "relaxed" | "realistic" | "hard";
 export type CompetitorStatus = "active" | "acquired" | "merged" | "bankrupt";
 export type NewsTone = "positive" | "warning" | "critical" | "neutral";
 export type GameSpeed = 0 | 1 | 5 | 10;
@@ -176,11 +179,29 @@ export interface ProductState {
   lastDemand: number;
   lastProduction: number;
   lastSales: number;
+  lastContractSales: number;
   productionTarget: number | null;
   lastLostSales: number;
+  lastReturns: number;
+  generation: number;
+  predecessorId?: string;
   configuration?: PcConfiguration;
   audience?: PcAudience;
   marketSegment?: PcMarketSegment;
+}
+
+export interface EnterpriseContractState {
+  id: string;
+  clientName: string;
+  productId: string;
+  segment: PcMarketSegment;
+  totalUnits: number;
+  fulfilledUnits: number;
+  unitPrice: number;
+  minimumQuality: number;
+  daysRemaining: number;
+  totalDays: number;
+  lastDelivery: number;
 }
 
 export interface CampaignState {
@@ -227,6 +248,8 @@ export interface CompetitorState {
   realizedProfit: number;
   lastReason: string;
   acquisitionPerk: string;
+  /** Verhindert, dass Integrationsboni durch wiederholtes Kaufen und Verkaufen mehrfach ausgelöst werden. */
+  acquisitionIntegrated?: boolean;
   financialHealth?: number;
   pcSegment?: PcMarketSegment;
   pcPricePosition?: number;
@@ -244,6 +267,8 @@ export interface NewsItem {
 export interface HistoryPoint {
   day: number;
   revenue: number;
+  productRevenue?: number;
+  contractRevenue?: number;
   expenses: number;
   profit: number;
   valuation: number;
@@ -265,6 +290,7 @@ export interface GameState {
   day: number;
   speed: GameSpeed;
   previousSpeed: ActiveGameSpeed;
+  difficulty: GameDifficulty;
   cash: number;
   debt: number;
   dailyDebtRepayment: number;
@@ -285,11 +311,18 @@ export interface GameState {
   factoryLevel: number;
   warehouseLevel: number;
   automationLevel: number;
+  factoryCondition: number;
+  maintenanceBudget: number;
   qualityFocus: number;
   marketingBudget: number;
   marketingStrategy: MarketingStrategy;
+  marketingFocus: MarketingFocus;
+  marketingTarget: MarketingTarget;
   pricingStrategy: PricingStrategy;
   campaign: CampaignState | null;
+  autoAcceptContracts: boolean;
+  enterpriseContracts: EnterpriseContractState[];
+  productGenerations: Record<PcMarketSegment, number>;
   products: ProductState[];
   competitors: CompetitorState[];
   founderShares: number;
@@ -299,11 +332,17 @@ export interface GameState {
   takeoverRisk: number;
   takeoverDefenseDays: number;
   monthlyRevenue: number;
+  monthlyProductRevenue: number;
+  monthlyContractRevenue: number;
   monthlyExpenses: number;
   lastMonthRevenue: number;
+  lastMonthProductRevenue: number;
+  lastMonthContractRevenue: number;
   lastMonthExpenses: number;
   lastMonthInvestmentIncome: number;
   lastDayRevenue: number;
+  lastDayProductRevenue: number;
+  lastDayContractRevenue: number;
   lastDayExpenses: number;
   history: HistoryPoint[];
   news: NewsItem[];
@@ -348,12 +387,17 @@ export type GameAction =
   | { type: "SET_PRODUCT_PRICE"; productId: string; price: number }
   | { type: "UPGRADE_PRODUCT"; productId: string }
   | { type: "SET_PRODUCTION_TARGET"; productId: string; target: number | null }
+  | { type: "SET_MAINTENANCE_BUDGET"; value: number }
+  | { type: "SET_AUTO_ACCEPT_CONTRACTS"; enabled: boolean }
+  | { type: "ACCEPT_ENTERPRISE_CONTRACT"; offerId: string; productId: string }
   | { type: "UPGRADE_FACTORY" }
   | { type: "UPGRADE_WAREHOUSE" }
   | { type: "UPGRADE_AUTOMATION" }
   | { type: "SET_QUALITY_FOCUS"; value: number }
   | { type: "SET_MARKETING_BUDGET"; value: number }
   | { type: "SET_MARKETING_STRATEGY"; strategy: MarketingStrategy }
+  | { type: "SET_MARKETING_FOCUS"; focus: MarketingFocus }
+  | { type: "SET_MARKETING_TARGET"; target: MarketingTarget }
   | { type: "START_CAMPAIGN"; campaignId: string }
   | { type: "BORROW"; amount: number }
   | { type: "REPAY"; amount: number }
@@ -363,7 +407,10 @@ export type GameAction =
   | { type: "SELL_STOCK"; competitorId: string; shares: number }
   | { type: "ACQUIRE_COMPETITOR"; competitorId: string }
   | { type: "MERGE_COMPETITOR"; competitorId: string }
+  | { type: "DIVEST_COMPETITOR"; competitorId: string }
+  | { type: "RELIST_COMPETITOR"; competitorId: string }
   | { type: "ACTIVATE_DEFENSE" }
+  | { type: "SET_DIFFICULTY"; difficulty: GameDifficulty }
   | { type: "DISMISS_ONBOARDING" }
   | { type: "LOAD_STATE"; state: GameState }
   | { type: "RESET" };

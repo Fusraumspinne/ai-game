@@ -4,14 +4,9 @@ import { useMemo } from "react";
 import { DAYS_PER_MONTH, DAYS_PER_YEAR, GAME_START_YEAR } from "@/app/game/data";
 import {
   formatCompactMoney,
-  getAnnualInterestRate,
-  getDailyDebtRepayment,
-  getDailyMarketingCost,
-  getDailyPayroll,
-  getEstimatedMonthlyPortfolioIncome,
+  getMonthlyFinancialProjection,
   getNetWorth,
   getPortfolioValue,
-  getProductEconomics,
 } from "@/app/game/engine";
 import type { GameState, HistoryPoint } from "@/app/game/types";
 import { MetricCard, Panel, PanelHeader, SectionTitle, StatusBadge } from "./game-ui";
@@ -41,6 +36,8 @@ export function AccountingSection({ state }: { state: GameState }) {
       const current: HistoryPoint = {
         day: state.day,
         revenue: state.monthlyRevenue,
+        productRevenue: state.monthlyProductRevenue,
+        contractRevenue: state.monthlyContractRevenue,
         expenses: state.monthlyExpenses,
         profit: currentProfit,
         valuation: state.valuation,
@@ -64,6 +61,8 @@ export function AccountingSection({ state }: { state: GameState }) {
       grouped.set(year, {
         day: item.day,
         revenue: (previous?.revenue ?? 0) + item.revenue,
+        productRevenue: (previous?.productRevenue ?? 0) + (item.productRevenue ?? item.revenue),
+        contractRevenue: (previous?.contractRevenue ?? 0) + (item.contractRevenue ?? 0),
         expenses: (previous?.expenses ?? 0) + item.expenses,
         profit: (previous?.profit ?? 0) + item.profit,
         valuation: item.valuation,
@@ -78,50 +77,20 @@ export function AccountingSection({ state }: { state: GameState }) {
   }, [monthly]);
   const chart = monthly.slice(-12);
   const developmentChart = monthly;
-  const productRevenueMonth = state.products.reduce((sum, product) => {
-    const economics = getProductEconomics(state, product);
-    return sum + (economics?.revenue ?? 0) * DAYS_PER_MONTH;
-  }, 0);
-  const productionMonth = state.products.reduce((sum, product) => {
-    const economics = getProductEconomics(state, product);
-    return sum + (economics?.productionCost ?? 0) * DAYS_PER_MONTH;
-  }, 0);
-  const payrollMonth = getDailyPayroll(state) * DAYS_PER_MONTH;
-  const marketingMonth = getDailyMarketingCost(state) * DAYS_PER_MONTH;
-  const interestMonth = (state.debt * getAnnualInterestRate(state)) / 12;
-  const debtPrincipalMonth = Math.min(
-    state.debt,
-    getDailyDebtRepayment(state) * DAYS_PER_MONTH,
-  );
-  const debtServiceMonth = interestMonth + debtPrincipalMonth;
-  const knownOperatingExpenses = productionMonth + payrollMonth + marketingMonth + interestMonth;
-  const operatingRevenueMonth = Math.max(
-    productRevenueMonth,
-    state.lastDayRevenue * DAYS_PER_MONTH,
-  );
-  const operatingExpensesMonth = Math.max(
-    knownOperatingExpenses,
-    state.lastDayExpenses * DAYS_PER_MONTH,
-  );
-  const consolidatedRevenueMonth = Math.max(0, operatingRevenueMonth - productRevenueMonth);
-  const consolidatedExpensesMonth = Math.max(0, operatingExpensesMonth - knownOperatingExpenses);
-  const portfolioIncomeMonth = getEstimatedMonthlyPortfolioIncome(state);
-  const totalIncomeMonth = operatingRevenueMonth + portfolioIncomeMonth;
-  const totalExpensesMonth = operatingExpensesMonth;
-  const totalMonthlyOutflow = totalExpensesMonth + debtPrincipalMonth;
-  const projectedMonthlyProfit = totalIncomeMonth - totalMonthlyOutflow;
+  const projection = getMonthlyFinancialProjection(state);
+  const projectedMonthlyProfit = projection.profit;
 
   return (
     <div className="space-y-5">
       <SectionTitle
         eyebrow="Finanzbuchhaltung"
         title="Buchhaltung & Controlling"
-        description="Monats- und Jahresabschlüsse, Kostenstruktur und Deckungsbeiträge deiner Produkte an einem Ort."
+        description="Monats- und Jahresabschlüsse, Kostenstruktur und Unternehmensentwicklung an einem Ort."
         action={<StatusBadge tone={currentProfit >= 0 ? "success" : "danger"} dot>{currentProfit >= 0 ? "Positives Ergebnis" : "Verlustperiode"}</StatusBadge>}
       />
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <MetricCard label="Umsatz laufender Monat" value={formatCompactMoney(state.monthlyRevenue)} detail="Noch nicht abgeschlossen" icon={<Icon name="coins" size={17} />} tone="cyan" />
+        <MetricCard label="Umsatz laufender Monat" value={formatCompactMoney(state.monthlyRevenue)} detail={`${formatCompactMoney(state.monthlyProductRevenue)} Produkte · ${formatCompactMoney(state.monthlyContractRevenue)} Aufträge`} icon={<Icon name="coins" size={17} />} tone="cyan" />
         <MetricCard label="Aufwand laufender Monat" value={formatCompactMoney(state.monthlyExpenses)} detail="Betrieb, Personal und Zinsen" icon={<Icon name="finance" size={17} />} />
         <MetricCard label="Betriebsergebnis" value={formatCompactMoney(currentProfit)} detail={`${margin(currentProfit, state.monthlyRevenue)} Marge`} icon={<Icon name={currentProfit >= 0 ? "trendUp" : "trendDown"} size={17} />} tone={currentProfit >= 0 ? "green" : "amber"} />
         <MetricCard label="Nettovermögen" value={formatCompactMoney(getNetWorth(state))} detail={`davon ${formatCompactMoney(getPortfolioValue(state))} Wertpapiere`} icon={<Icon name="building" size={17} />} />
@@ -135,7 +104,7 @@ export function AccountingSection({ state }: { state: GameState }) {
               ariaLabel="Vergleich von Umsatz und Aufwand der letzten zwölf Monate"
               labels={chart.map((item) => monthLabel(item.day))}
               series={[
-                { label: "Umsatz", color: "#2563eb", values: chart.map((item) => item.revenue), formatValue: formatCompactMoney },
+                { label: "Gesamtumsatz", color: "#2563eb", values: chart.map((item) => item.revenue), formatValue: formatCompactMoney },
                 { label: "Aufwand", color: "#94a3b8", values: chart.map((item) => item.expenses), formatValue: formatCompactMoney },
               ]}
             />
@@ -165,18 +134,22 @@ export function AccountingSection({ state }: { state: GameState }) {
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {[
-                  { label: "Produktverkäufe", income: productRevenueMonth, expense: 0 },
-                  { label: "Umsatz übernommener Unternehmen", income: consolidatedRevenueMonth, expense: 0 },
-                  { label: "Dividenden aus Beteiligungen", income: portfolioIncomeMonth, expense: 0 },
-                  { label: "Produktion & Material", income: 0, expense: productionMonth },
-                  { label: "Personal", income: 0, expense: payrollMonth },
-                  { label: "Marketing & Kampagnen", income: 0, expense: marketingMonth },
+                  { label: "Produktverkäufe", income: projection.productRevenue, expense: 0 },
+                  { label: "Firmenkundenaufträge", income: projection.contractRevenue, expense: 0 },
+                  { label: "Umsatz übernommener Unternehmen", income: projection.subsidiaryRevenue, expense: 0 },
+                  { label: "Dividenden aus Beteiligungen", income: projection.portfolioIncome, expense: 0 },
+                  { label: "Produktion & Material", income: 0, expense: projection.productionExpenses },
+                  { label: "Garantie & Retouren", income: 0, expense: projection.warrantyExpenses },
+                  { label: "Personal", income: 0, expense: projection.payrollExpenses },
+                  { label: "Marketing & Kampagnen", income: 0, expense: projection.marketingExpenses },
+                  { label: "Fabrikwartung", income: 0, expense: projection.maintenanceExpenses },
                   {
                     label: "Kreditrate",
                     income: 0,
-                    expense: debtServiceMonth,
+                    expense: projection.creditPayment,
                   },
-                  { label: "Kosten übernommener Unternehmen", income: 0, expense: consolidatedExpensesMonth },
+                  { label: "Vertragsstrafen", income: 0, expense: projection.contractPenalties },
+                  { label: "Kosten übernommener Unternehmen", income: 0, expense: projection.subsidiaryExpenses },
                 ].map((entry) => (
                   <tr key={entry.label} className="hover:bg-slate-50/70">
                     <td className="px-4 py-2.5 text-slate-700">{entry.label}</td>
@@ -192,8 +165,8 @@ export function AccountingSection({ state }: { state: GameState }) {
               <tfoot className="border-t-2 border-slate-300 bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 font-semibold text-slate-900">Summe Zahlungsströme</th>
-                  <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-700 tabular-nums">{money.format(totalIncomeMonth)}</td>
-                  <td className="px-4 py-3 text-right font-mono font-semibold text-rose-700 tabular-nums">{money.format(totalMonthlyOutflow)}</td>
+                  <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-700 tabular-nums">{money.format(projection.totalIncome)}</td>
+                  <td className="px-4 py-3 text-right font-mono font-semibold text-rose-700 tabular-nums">{money.format(projection.totalOutflow)}</td>
                 </tr>
                 <tr className={projectedMonthlyProfit >= 0 ? "bg-emerald-50" : "bg-rose-50"}>
                   <th className="px-4 py-3 font-semibold text-slate-950">Voraussichtlicher Monatsgewinn</th>
@@ -264,7 +237,7 @@ export function AccountingSection({ state }: { state: GameState }) {
         </div>
         <div className="overflow-x-auto border-t border-slate-200">
           <table className="w-full min-w-[980px] text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500"><tr>{["Jahr", "Umsatz", "Aufwand", "Ergebnis", "Marge", "Liquidität", "Schulden", "Unternehmenswert", "Marktanteil", "Mitarbeitende"].map((label) => <th key={label} className="px-4 py-3 font-semibold uppercase tracking-wide">{label}</th>)}</tr></thead>
+            <thead className="bg-slate-50 text-slate-500"><tr>{["Jahr", "Gesamtumsatz", "Aufwand", "Ergebnis", "Marge", "Liquidität", "Schulden", "Unternehmenswert", "Marktanteil", "Mitarbeitende"].map((label) => <th key={label} className="px-4 py-3 font-semibold uppercase tracking-wide">{label}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-200">
               {yearly.slice().reverse().map((item, index) => (
                 <tr key={`${item.day}-${index}`} className="hover:bg-slate-50">

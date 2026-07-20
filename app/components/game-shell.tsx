@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { GAME_SPEED_OPTIONS } from "../game/time";
 import type { GameSection, GameSpeed } from "../game/types";
@@ -68,9 +68,21 @@ export const GAME_NAVIGATION: readonly GameNavigationItem[] = [
   },
   {
     id: "company",
-    label: "Betrieb",
-    shortLabel: "Betrieb",
+    label: "Fabrik & Anlagen",
+    shortLabel: "Fabrik",
     icon: "building",
+  },
+  {
+    id: "production",
+    label: "Produktion & Aufträge",
+    shortLabel: "Produktion",
+    icon: "production",
+  },
+  {
+    id: "people",
+    label: "Personal",
+    shortLabel: "Personal",
+    icon: "people",
   },
   {
     id: "marketing",
@@ -80,16 +92,35 @@ export const GAME_NAVIGATION: readonly GameNavigationItem[] = [
   },
   {
     id: "market",
-    label: "Markt & Aktien",
+    label: "Absatzmarkt",
     shortLabel: "Markt",
+    icon: "trendUp",
+  },
+  {
+    id: "finance",
+    label: "Finanzierung",
+    shortLabel: "Finanzen",
+    icon: "finance",
+  },
+  {
+    id: "stocks",
+    label: "Aktien",
+    shortLabel: "Aktien",
     icon: "stocks",
+  },
+  {
+    id: "deals",
+    label: "Übernahmen",
+    shortLabel: "Deals",
+    icon: "deals",
   },
 ] as const;
 
 const NAVIGATION_GROUPS = [
   { label: "Steuerung", items: ["dashboard", "accounting"] },
-  { label: "Produkt", items: ["builder", "research"] },
-  { label: "Unternehmen", items: ["company", "marketing", "market"] },
+  { label: "Produkt & Markt", items: ["builder", "research", "market"] },
+  { label: "Betrieb", items: ["production", "company", "people", "marketing"] },
+  { label: "Kapital", items: ["finance", "stocks", "deals"] },
 ] as const;
 
 const saveStatusClasses: Record<AutosaveStatus, string> = {
@@ -572,20 +603,55 @@ function MobileNavigation({
   onSectionChange,
   hasAside,
 }: MobileNavigationProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const primaryIds: GameSection[] = ["dashboard", "builder", "production", "market"];
+  const primaryItems = primaryIds.map((id) => GAME_NAVIGATION.find((item) => item.id === id)!);
+
   return (
+    <>
+    {menuOpen ? (
+      <div className="fixed inset-0 z-40 bg-slate-950/30 lg:hidden" role="presentation" onClick={() => setMenuOpen(false)}>
+        <div className="absolute inset-x-2 bottom-[4.5rem] max-h-[70vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-2xl" role="dialog" aria-label="Alle Spielbereiche" onClick={(event) => event.stopPropagation()}>
+          <div className="mb-3 flex items-center justify-between px-1">
+            <p className="text-xs font-semibold text-slate-900">Alle Bereiche</p>
+            <button type="button" onClick={() => setMenuOpen(false)} className="grid size-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100" aria-label="Bereichsmenü schließen"><Icon name="x" size={16} /></button>
+          </div>
+          <div className="space-y-4">
+            {NAVIGATION_GROUPS.map((group) => (
+              <div key={group.label}>
+                <p className="mb-1.5 px-1 text-[0.58rem] font-semibold tracking-[0.12em] text-slate-400 uppercase">{group.label}</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {group.items.map((id) => {
+                    const item = GAME_NAVIGATION.find((candidate) => candidate.id === id)!;
+                    const active = section === item.id;
+                    return (
+                      <button key={item.id} type="button" onClick={() => { onSectionChange(item.id); setMenuOpen(false); }} className={cx("flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-xs font-medium", active ? "border-blue-200 bg-blue-50 text-blue-800" : "border-slate-200 text-slate-600")}>
+                        <Icon name={item.icon} size={16} className="shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+          {hasAside ? <a href="#game-pulse" onClick={() => setMenuOpen(false)} className="mt-3 flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-medium text-slate-600"><Icon name="news" size={16} />Pulse</a> : null}
+        </div>
+      </div>
+    ) : null}
     <nav
       className="absolute inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
       aria-label="Spielbereiche"
     >
       <div className="flex h-16 items-stretch overflow-x-auto px-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {GAME_NAVIGATION.map((item) => {
+        {primaryItems.map((item) => {
           const active = section === item.id;
 
           return (
             <button
               key={item.id}
               type="button"
-              onClick={() => onSectionChange(item.id)}
+              onClick={() => { onSectionChange(item.id); setMenuOpen(false); }}
               className={cx(
                 "relative flex min-w-[4.35rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6rem] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 motion-reduce:transition-none",
                 active
@@ -606,17 +672,13 @@ function MobileNavigation({
             </button>
           );
         })}
-        {hasAside ? (
-          <a
-            href="#game-pulse"
-            className="relative flex min-w-[4.35rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6rem] font-medium text-slate-600 outline-none transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 motion-reduce:transition-none"
-          >
-            <Icon name="news" size={19} />
-            <span>Pulse</span>
-          </a>
-        ) : null}
+        <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-expanded={menuOpen} className={cx("relative flex min-w-[4.35rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6rem] font-medium outline-none", !primaryIds.includes(section) || menuOpen ? "text-blue-700" : "text-slate-500")}>
+          <Icon name="menu" size={19} />
+          <span>Bereiche</span>
+        </button>
       </div>
     </nav>
+    </>
   );
 }
 

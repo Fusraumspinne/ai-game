@@ -14,7 +14,7 @@ import {
   STARTER_PART_IDS,
 } from "./pc-system";
 
-export const GAME_VERSION = 11;
+export const GAME_VERSION = 24;
 export const STORAGE_KEY = "circuit-tycoon-save-v1";
 export const GAME_START_YEAR = 1984;
 export const DAYS_PER_MONTH = 30;
@@ -435,10 +435,136 @@ export const CAMPAIGNS: Array<CampaignState & { upfrontCost: number; description
   },
 ];
 
+type CompetitorTemplate = Omit<
+  CompetitorState,
+  "averageCost" | "realizedProfit" | "priceHistory"
+>;
+
+const GENERATED_COMPETITOR_PROFILES: Array<{
+  sector: string;
+  description: string;
+  segment?: CompetitorState["pcSegment"];
+  pricePosition?: number;
+}> = [
+  { sector: "PC-Discounter", description: "Konzentriert sich auf preiswerte Rechner und hohe Stückzahlen.", segment: "budget", pricePosition: 0.78 },
+  { sector: "Business-PCs", description: "Beliefert Büros, Bildungseinrichtungen und öffentliche Auftraggeber.", segment: "budget", pricePosition: 0.96 },
+  { sector: "Consumer-PCs", description: "Verkauft ausgewogene Computer über Handel und Direktvertrieb.", segment: "mainstream", pricePosition: 1 },
+  { sector: "Kreativ-PCs", description: "Entwickelt leistungsfähige Systeme für Medien- und Kreativarbeit.", segment: "mainstream", pricePosition: 1.09 },
+  { sector: "Gaming-PCs", description: "Tritt mit schnellen Produktzyklen im Enthusiastenmarkt an.", segment: "performance", pricePosition: 1.14 },
+  { sector: "Workstations", description: "Baut hochpreisige Systeme für Forschung und professionelle Anwendungen.", segment: "performance", pricePosition: 1.28 },
+  { sector: "Halbleiter", description: "Entwickelt spezialisierte Chips für Computer und Rechenzentren." },
+  { sector: "Datenspeicher", description: "Produziert Speichertechnik für PCs, Server und Unternehmenssysteme." },
+  { sector: "Netzwerktechnik", description: "Liefert Netzwerkkomponenten und Infrastruktur für Geschäftskunden." },
+  { sector: "Cloud & Software", description: "Erwirtschaftet wiederkehrende Erlöse mit Software und Cloud-Diensten." },
+  { sector: "Industrieautomation", description: "Automatisiert Fertigungslinien und elektronische Montageprozesse." },
+  { sector: "Energie & Kühlung", description: "Entwickelt Netzteile, Kühlsysteme und effiziente Elektronik." },
+];
+
+const GENERATED_COMPETITOR_PREFIXES = [
+  "Aurora", "Atlas", "BluePeak", "CoreAxis", "Delta", "Eon", "Flux",
+  "Granite", "Horizon", "Ion", "Keystone", "NovaCircuit", "Optima",
+  "Parallax", "Quanta", "Silverline", "Titan", "Vector", "Zenith",
+];
+
+const GENERATED_COMPETITOR_SUFFIXES = [
+  "Technologies", "Digital", "Microsystems", "Computing",
+];
+
+const GENERATED_COMPETITOR_COLORS = [
+  "#2563EB", "#0891B2", "#0F766E", "#16A34A", "#65A30D", "#CA8A04",
+  "#EA580C", "#DC2626", "#DB2777", "#9333EA", "#7C3AED", "#475569",
+];
+
+function stableCompetitorValue(index: number, salt: number) {
+  const raw = Math.sin((index + 1) * 12.9898 + salt * 78.233) * 43_758.5453;
+  return raw - Math.floor(raw);
+}
+
+function createGeneratedCompetitors(count: number): CompetitorTemplate[] {
+  return Array.from({ length: Math.max(0, count) }, (_, index) => {
+    const profile = GENERATED_COMPETITOR_PROFILES[index % GENERATED_COMPETITOR_PROFILES.length];
+    const prefix = GENERATED_COMPETITOR_PREFIXES[index % GENERATED_COMPETITOR_PREFIXES.length];
+    const suffix = GENERATED_COMPETITOR_SUFFIXES[Math.floor(index / GENERATED_COMPETITOR_PREFIXES.length)];
+    const scale = index % 8;
+    const revenue = Math.round(
+      2_400_000 * 1.82 ** scale * (0.78 + stableCompetitorValue(index, 1) * 0.5),
+    );
+    const innovation = Math.round(30 + stableCompetitorValue(index, 2) * 64);
+    const brand = Math.round(18 + stableCompetitorValue(index, 3) * 67);
+    const growth = -0.045 + stableCompetitorValue(index, 4) * 0.275;
+    const debtRatio = 0.1 + stableCompetitorValue(index, 5) * 0.64;
+    const profitMargin = -0.015 + stableCompetitorValue(index, 6) * 0.225;
+    const financialHealth = Math.round(
+      Math.max(24, Math.min(98, 88 + profitMargin * 42 + growth * 18 - debtRatio * 58)),
+    );
+    const sentiment = Math.round(
+      Math.max(20, Math.min(88, 48 + growth * 75 + profitMargin * 35 - debtRatio * 18)),
+    );
+    const sharesOutstanding = Math.round(
+      (900_000 + scale * 620_000) * (0.85 + stableCompetitorValue(index, 7) * 0.35),
+    );
+    const valuationMultiple = Math.max(
+      0.28,
+      Math.min(1.45, 0.42 + profitMargin * 1.8 + growth * 0.75 + innovation / 750),
+    );
+    const fairValue = Math.max(0.2, revenue * valuationMultiple / sharesOutstanding);
+    const price = Math.max(
+      0.2,
+      fairValue * (0.91 + stableCompetitorValue(index, 8) * 0.18),
+    );
+    const marketShare = 0.4 + stableCompetitorValue(index, 9) * (1.4 + scale * 0.62);
+    const history = Array.from({ length: 5 }, (_, historyIndex) => {
+      if (historyIndex === 4) return price;
+      const trend = 0.87 + historyIndex * 0.032;
+      const variation = (stableCompetitorValue(index, 20 + historyIndex) - 0.5) * 0.06;
+      return Math.max(0.2, price * (trend + variation));
+    });
+    const acquisitionPerk = profile.segment === "budget"
+      ? "+0,5 Prozentpunkte Marktanteil durch Volumenvertrieb"
+      : profile.segment === "mainstream"
+        ? "+2 Marke durch zusätzliche Handelsreichweite"
+        : profile.segment === "performance"
+          ? "+250 Forschungspunkte aus dem Entwicklungsteam"
+          : "+2 Reputation durch zusätzliche Technologiekompetenz";
+
+    return {
+      id: `market-company-${String(index + 1).padStart(3, "0")}`,
+      name: `${prefix} ${suffix}`,
+      ticker: `N${(index + 24).toString(36).toUpperCase().padStart(2, "0")}`,
+      sector: profile.sector,
+      color: GENERATED_COMPETITOR_COLORS[index % GENERATED_COMPETITOR_COLORS.length],
+      description: profile.description,
+      sharesOutstanding,
+      price,
+      fairValue,
+      revenue,
+      profitMargin,
+      growth,
+      innovation,
+      brand,
+      debtRatio,
+      marketShare,
+      sentiment,
+      history,
+      status: "active",
+      ownedShares: 0,
+      lastReason: financialHealth < 45
+        ? "Schwache Bilanz und hoher Wettbewerbsdruck erhöhen das Insolvenzrisiko."
+        : growth > 0.14
+          ? "Produktnachfrage und Investitionen treiben das operative Wachstum."
+          : "Umsatz, Marge und Bewertung entwickeln sich im Rahmen des Marktsegments.",
+      acquisitionPerk,
+      financialHealth,
+      pcSegment: profile.segment,
+      pcPricePosition: profile.pricePosition
+        ? profile.pricePosition * (0.94 + stableCompetitorValue(index, 10) * 0.12)
+        : undefined,
+    };
+  });
+}
+
 function createCompetitors(): CompetitorState[] {
-  const competitors: Array<
-    Omit<CompetitorState, "averageCost" | "realizedProfit" | "priceHistory">
-  > = [
+  const competitors: CompetitorTemplate[] = [
     {
       id: "microfab",
       name: "MicroFab Assembly",
@@ -1050,7 +1176,11 @@ function createCompetitors(): CompetitorState[] {
       financialHealth: 38,
     },
   ];
-  return competitors.map((competitor) => ({
+  const completeMarket = [
+    ...competitors,
+    ...createGeneratedCompetitors(100 - competitors.length),
+  ];
+  return completeMarket.map((competitor) => ({
     ...competitor,
     averageCost: 0,
     realizedProfit: 0,
@@ -1077,7 +1207,8 @@ export function createInitialState(now = Date.now()): GameState {
     day: 0,
     speed: 1,
     previousSpeed: 1,
-    cash: 175_000,
+    difficulty: "realistic",
+    cash: 225_000,
     debt: 0,
     dailyDebtRepayment: 0,
     lifetimeRevenue: 0,
@@ -1109,11 +1240,18 @@ export function createInitialState(now = Date.now()): GameState {
     factoryLevel: 1,
     warehouseLevel: 1,
     automationLevel: 0,
+    factoryCondition: 100,
+    maintenanceBudget: 100,
     qualityFocus: 1,
-    marketingBudget: 350,
+    marketingBudget: 200,
     marketingStrategy: "balanced",
+    marketingFocus: "conversion",
+    marketingTarget: "all",
     pricingStrategy: "balanced",
     campaign: null,
+    autoAcceptContracts: false,
+    enterpriseContracts: [],
+    productGenerations: { budget: 1, mainstream: 0, performance: 0 },
     products: [
       {
         id: "product-circuit-one",
@@ -1127,8 +1265,11 @@ export function createInitialState(now = Date.now()): GameState {
         lastDemand: 0,
         lastProduction: 0,
         lastSales: 0,
+        lastContractSales: 0,
         productionTarget: null,
         lastLostSales: 0,
+        lastReturns: 0,
+        generation: 1,
         configuration: starterConfiguration,
         audience: "office",
         marketSegment: "budget",
@@ -1142,16 +1283,24 @@ export function createInitialState(now = Date.now()): GameState {
     takeoverRisk: 0,
     takeoverDefenseDays: 0,
     monthlyRevenue: 0,
+    monthlyProductRevenue: 0,
+    monthlyContractRevenue: 0,
     monthlyExpenses: 0,
     lastMonthRevenue: 0,
+    lastMonthProductRevenue: 0,
+    lastMonthContractRevenue: 0,
     lastMonthExpenses: 0,
     lastMonthInvestmentIncome: 0,
     lastDayRevenue: 0,
+    lastDayProductRevenue: 0,
+    lastDayContractRevenue: 0,
     lastDayExpenses: 0,
     history: [
       {
         day: 0,
         revenue: 0,
+        productRevenue: 0,
+        contractRevenue: 0,
         expenses: 0,
         profit: 0,
         valuation: 1_850_000,

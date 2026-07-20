@@ -13,16 +13,25 @@ import {
   getAutomaticResearchChoice,
   getBuybackQuote,
   getCompanyControl,
+  getCompetitorProductOffers,
+  getContractDailyTarget,
   getDailyPcMarketSize,
+  getDailySalesCapacity,
+  getEnterpriseContractOffers,
+  getEnterpriseContractCapacity,
   getEstimatedMonthlyPortfolioIncome,
   getFactoryCapacity,
   getHireCost,
+  getMonthlyFinancialProjection,
   getGovernanceEfficiency,
   getPortfolioValue,
   getPortfolioRealizedProfit,
   getProductEconomics,
+  getProductWarrantyRate,
   getResearchRate,
   getStockTradeQuote,
+  getStrategicStakeLevel,
+  getSubsidiaryExitQuote,
   getWorkforcePlan,
   getWarehouseCapacity,
   simulateDays,
@@ -165,7 +174,7 @@ test("ein Produktionsstopp erzeugt bei Nachfrage verlorene Verkäufe", () => {
   assertClose(product.lastLostSales, product.lastDemand - product.lastSales);
 });
 
-test("Direktverkaeufe umgehen das Lagerlimit, der Endbestand aber nicht", () => {
+test("automatische Verkaeufe umgehen das Lagerlimit, der Endbestand aber nicht", () => {
   const initial = createInitialState(1_000);
   const warehouseCapacity = getWarehouseCapacity(initial);
   const nearlyFullWarehouse: GameState = {
@@ -173,6 +182,7 @@ test("Direktverkaeufe umgehen das Lagerlimit, der Endbestand aber nicht", () => 
     employees: { ...initial.employees, production: 100 },
     products: initial.products.map((product) => ({
       ...product,
+      salesChannel: "retail",
       inventory: warehouseCapacity - 1,
       productionTarget: 100,
     })),
@@ -737,10 +747,18 @@ test("alte Produktstatistiken und eigenes Uebernahmerisiko werden beim Laden ent
   const legacySave = {
     ...initial,
     version: 8,
+    monthlyPlan: { revenue: 1, profit: 2, production: 3, research: 4 },
+    autoStaffing: true,
+    staffingTargets: initial.employees,
+    investorConfidence: 99,
+    capitalGuidance: "ambitious",
+    dividendPolicy: "generous",
+    loanRateAdjustment: 0.02,
     takeoverRisk: 87,
     takeoverDefenseDays: 120,
     products: initial.products.map((product) => ({
       ...product,
+      salesChannel: "retail",
       unitsSold: 123_456,
       lifetimeRevenue: 987_654_321,
     })),
@@ -751,6 +769,14 @@ test("alte Produktstatistiken und eigenes Uebernahmerisiko werden beim Laden ent
   assert.equal(migrated.takeoverDefenseDays, 0);
   assert.equal("unitsSold" in migrated.products[0], false);
   assert.equal("lifetimeRevenue" in migrated.products[0], false);
+  assert.equal("salesChannel" in migrated.products[0], false);
+  assert.equal("monthlyPlan" in migrated, false);
+  assert.equal("autoStaffing" in migrated, false);
+  assert.equal("staffingTargets" in migrated, false);
+  assert.equal("investorConfidence" in migrated, false);
+  assert.equal("capitalGuidance" in migrated, false);
+  assert.equal("dividendPolicy" in migrated, false);
+  assert.equal("loanRateAdjustment" in migrated, false);
 });
 
 test("Attributforschung kann ohne Stufenlimit ueber Stufe 4 hinaus fortgesetzt werden", () => {
@@ -1137,4 +1163,406 @@ test("eine 360-Tage-Simulation laeuft ohne Eventstopp vollstaendig durch", () =>
   assert.equal(result.state.day, initial.day + 360);
   assert.equal(result.state.speed, initial.speed);
   assert.equal("pendingEvent" in result.state, false);
+});
+
+test("Produktgenerationen verdraengen den eigenen Vorgaenger im selben Segment", () => {
+  const initial = createInitialState(1_000);
+  const original = starterProduct(initial);
+  const portfolio: GameState = {
+    ...initial,
+    products: [
+      { ...original, generation: 1 },
+      { ...original, id: "circuit-two", name: "Circuit Two", generation: 2, predecessorId: original.id },
+    ],
+  };
+  const oldDemand = getProductEconomics(portfolio, original.id)?.demand ?? 0;
+  const newDemand = getProductEconomics(portfolio, "circuit-two")?.demand ?? 0;
+
+  assert.ok(newDemand > oldDemand * 1.5, `${newDemand} sollte deutlich über ${oldDemand} liegen`);
+});
+
+test("schlechter Fabrikzustand erhoeht Retouren und Wartung stabilisiert die Anlage", () => {
+  const initial = createInitialState(1_000);
+  const worn: GameState = { ...initial, factoryCondition: 35, maintenanceBudget: 0 };
+  assert.ok(getProductWarrantyRate(worn, starterProduct(worn)) > getProductWarrantyRate(initial, starterProduct(initial)));
+
+  const idleProducts = initial.products.map((product) => ({ ...product, productionTarget: 0, inventory: 0 }));
+  const neglected = simulateDays({ ...initial, products: idleProducts, maintenanceBudget: 0 }, 1).state;
+  const maintained = simulateDays({ ...initial, products: idleProducts, maintenanceBudget: 2_000 }, 1).state;
+  assert.ok(maintained.factoryCondition > neglected.factoryCondition);
+});
+
+test("Firmenkundenvertraege schaffen feste Nachfrage und blockieren die Stilllegung", () => {
+  const initial = createInitialState(1_000);
+  const offer = getEnterpriseContractOffers(initial).find((candidate) => candidate.segment === "budget");
+  assert.ok(offer);
+  assert.ok(Math.ceil(offer.totalUnits / offer.durationDays) <= Math.min(getFactoryCapacity(initial), getDailySalesCapacity(initial)));
+  const accepted = gameReducer(initial, {
+    type: "ACCEPT_ENTERPRISE_CONTRACT",
+    offerId: offer.id,
+    productId: "product-circuit-one",
+  });
+  const firstContract = accepted.enterpriseContracts[0];
+  assert.ok(firstContract);
+  const acceptedEconomics = getProductEconomics(accepted, "product-circuit-one");
+  assert.ok(acceptedEconomics);
+  assert.ok(firstContract.unitPrice <= acceptedEconomics.unitCost * 1.07 + 0.01);
+  assert.equal(gameReducer(accepted, { type: "RETIRE_PRODUCT", productId: "product-circuit-one" }), accepted);
+  const dailyTarget = getContractDailyTarget(firstContract);
+  const delivered = simulateDays(accepted, 1).state;
+  const deliveredUnits = delivered.enterpriseContracts[0]?.lastDelivery ?? 0;
+  assert.ok(deliveredUnits > dailyTarget);
+  assert.equal(delivered.enterpriseContracts[0]?.fulfilledUnits, deliveredUnits);
+  assertClose(delivered.lastDayContractRevenue, deliveredUnits * firstContract.unitPrice);
+  assertClose(
+    delivered.lastDayRevenue,
+    delivered.lastDayProductRevenue + delivered.lastDayContractRevenue,
+  );
+  assert.equal(delivered.monthlyContractRevenue, delivered.lastDayContractRevenue);
+  assert.equal(delivered.monthlyProductRevenue, delivered.lastDayProductRevenue);
+  const projection = getMonthlyFinancialProjection(delivered);
+  assertClose(projection.productRevenue, delivered.lastDayProductRevenue * 30);
+  assert.ok(projection.contractProductionExpenses > 0);
+  assert.ok(projection.contractWarrantyExpenses > 0);
+  assertClose(
+    projection.productionExpenses,
+    projection.productProductionExpenses + projection.contractProductionExpenses,
+  );
+  assertClose(
+    projection.warrantyExpenses,
+    projection.productWarrantyExpenses + projection.contractWarrantyExpenses,
+  );
+  assertClose(
+    projection.totalIncome,
+    projection.productRevenue + projection.contractRevenue + projection.subsidiaryRevenue + projection.portfolioIncome,
+  );
+  assertClose(
+    projection.totalOutflow,
+    projection.productionExpenses + projection.warrantyExpenses + projection.payrollExpenses +
+      projection.marketingExpenses + projection.maintenanceExpenses + projection.interestExpenses +
+      projection.contractPenalties + projection.subsidiaryExpenses + projection.debtPrincipal,
+  );
+  assertClose(projection.profit, projection.totalIncome - projection.totalOutflow);
+
+  const monthClosed = simulateDays({ ...accepted, day: 29 }, 1).state;
+  assert.ok(monthClosed.lastMonthContractRevenue > 0);
+  assert.equal(monthClosed.monthlyContractRevenue, 0);
+  assert.equal(monthClosed.history.at(-1)?.contractRevenue, monthClosed.lastMonthContractRevenue);
+
+  const stopped = simulateDays({
+    ...accepted,
+    products: accepted.products.map((product) => ({ ...product, inventory: 0, productionTarget: 0 })),
+  }, 1).state;
+  const stoppedProjection = getMonthlyFinancialProjection(stopped);
+  assert.equal(stopped.lastDayContractRevenue, 0);
+  assert.equal(stoppedProjection.contractRevenue, 0);
+  assert.ok(stopped.cash < accepted.cash);
+  assert.ok(stoppedProjection.profit < 0);
+
+  const inventoryDelivery = simulateDays({
+    ...accepted,
+    products: accepted.products.map((product) => ({ ...product, inventory: 100, productionTarget: 0 })),
+  }, 1).state;
+  const inventoryProjection = getMonthlyFinancialProjection(inventoryDelivery);
+  assert.equal(inventoryDelivery.products[0].lastProduction, 0);
+  const inventoryConsumerSales = inventoryDelivery.products[0].lastSales - inventoryDelivery.products[0].lastContractSales;
+  assert.ok(inventoryConsumerSales > 0);
+  assert.equal(inventoryDelivery.enterpriseContracts[0].lastDelivery, Math.min(100 - inventoryConsumerSales, firstContract.totalUnits));
+  assert.ok(inventoryProjection.contractProductionExpenses > 0);
+  assert.ok(inventoryProjection.productProductionExpenses > 0);
+  assertClose(
+    inventoryProjection.productionExpenses,
+    inventoryProjection.productProductionExpenses + inventoryProjection.contractProductionExpenses,
+  );
+  assert.ok(inventoryProjection.contractRevenue < inventoryDelivery.lastDayContractRevenue * 30);
+
+  const scarceInventory = simulateDays({
+    ...accepted,
+    products: accepted.products.map((product) => ({ ...product, inventory: 1, productionTarget: 0 })),
+  }, 1).state;
+  assert.equal(scarceInventory.products[0].lastContractSales, 0);
+  assert.equal(scarceInventory.enterpriseContracts[0].lastDelivery, 0);
+  assert.equal(scarceInventory.products[0].lastSales, 1);
+
+  const nextMonth = { ...accepted, day: 30 };
+  const secondOffer = getEnterpriseContractOffers(nextMonth).find((candidate) => candidate.segment === "budget");
+  assert.ok(secondOffer);
+  const acceptedTwice = gameReducer(nextMonth, {
+    type: "ACCEPT_ENTERPRISE_CONTRACT",
+    offerId: secondOffer.id,
+    productId: "product-circuit-one",
+  });
+  assert.equal(acceptedTwice.enterpriseContracts.length, 2);
+
+  const almostComplete: GameState = {
+    ...accepted,
+    enterpriseContracts: [{ ...firstContract, totalUnits: 1, fulfilledUnits: 0, daysRemaining: 100 }],
+  };
+  const completed = simulateDays(almostComplete, 1).state;
+  assert.equal(completed.enterpriseContracts.length, 0);
+  assert.ok(completed.news.some((item) => item.id.startsWith("contract-complete-")));
+  assert.equal(gameReducer(completed, {
+    type: "ACCEPT_ENTERPRISE_CONTRACT",
+    offerId: offer.id,
+    productId: "product-circuit-one",
+  }), completed);
+});
+
+test("defekte Auftragswerte koennen Liquiditaet und Bewertung nicht mit NaN anstecken", () => {
+  const initial = createInitialState(1_000);
+  const offer = getEnterpriseContractOffers(initial).find((candidate) => candidate.segment === "budget");
+  assert.ok(offer);
+  const corrupted: GameState = {
+    ...initial,
+    cash: Number.NaN,
+    monthlyRevenue: Number.NaN,
+    enterpriseContracts: [{
+      ...offer,
+      productId: "product-circuit-one",
+      totalUnits: Number.NaN,
+      fulfilledUnits: Number.NaN,
+      unitPrice: Number.NaN,
+      minimumQuality: Number.NaN,
+      daysRemaining: Number.NaN,
+      totalDays: Number.NaN,
+      lastDelivery: Number.NaN,
+    }],
+  };
+
+  assert.ok(Number.isFinite(getContractDailyTarget(corrupted.enterpriseContracts[0])));
+  const result = simulateDays(corrupted, 2).state;
+  for (const value of [
+    result.cash,
+    result.monthlyRevenue,
+    result.monthlyExpenses,
+    result.lifetimeRevenue,
+    result.lifetimeProfit,
+    result.valuation,
+    result.sharePrice,
+  ]) assert.ok(Number.isFinite(value));
+  assert.notEqual(result.valuation, Number.MAX_SAFE_INTEGER);
+
+  const repaired = mergeLoadedState({
+    ...initial,
+    cash: null,
+    monthlyRevenue: null,
+    enterpriseContracts: [{
+      ...offer,
+      productId: "product-circuit-one",
+      totalUnits: null,
+      fulfilledUnits: null,
+      unitPrice: null,
+      daysRemaining: null,
+      totalDays: null,
+      lastDelivery: null,
+    }],
+  });
+  assert.ok(repaired);
+  assert.ok(Number.isFinite(repaired.cash));
+  assert.ok(Number.isFinite(repaired.enterpriseContracts[0].totalUnits));
+  assert.ok(Number.isFinite(repaired.enterpriseContracts[0].daysRemaining));
+});
+
+test("mehrere parallele Auftraege bleiben auch bei verfehlten Fristen numerisch stabil", () => {
+  const initial = createInitialState(1_000);
+  const offer = getEnterpriseContractOffers(initial).find((candidate) => candidate.segment === "budget");
+  assert.ok(offer);
+  const crowded: GameState = {
+    ...initial,
+    enterpriseContracts: Array.from({ length: 24 }, (_, index) => ({
+      ...offer,
+      id: `${offer.id}-${index}`,
+      productId: "product-circuit-one",
+      daysRemaining: 3 + index % 4,
+      totalDays: 6,
+      fulfilledUnits: 0,
+      lastDelivery: 0,
+    })),
+  };
+  const result = simulateDays(crowded, 10).state;
+  assert.ok(Number.isFinite(result.cash));
+  assert.ok(Number.isFinite(result.valuation));
+  assert.ok(Number.isFinite(result.lastDayRevenue));
+  assert.ok(Number.isFinite(result.lastDayExpenses));
+});
+
+test("Auto-Auftraege akzeptieren nur profitable Vertraege mit freier Produktionskapazitaet", () => {
+  const initial = createInitialState(1_000);
+  const enabled = gameReducer(initial, { type: "SET_AUTO_ACCEPT_CONTRACTS", enabled: true });
+  assert.equal(enabled.autoAcceptContracts, true);
+  assert.ok(getEnterpriseContractCapacity(enabled).available > 0);
+  const automated = simulateDays(enabled, 1).state;
+  assert.ok(automated.enterpriseContracts.length > 0);
+  const accepted = automated.enterpriseContracts[0];
+  const economics = getProductEconomics(automated, accepted.productId);
+  assert.ok(economics);
+  assert.ok(accepted.unitPrice >= economics.unitCost * 1.01 - 0.01);
+
+  const blocked = {
+    ...enabled,
+    products: enabled.products.map((product) => ({
+      ...product,
+      productionTarget: getFactoryCapacity(enabled),
+    })),
+  };
+  assert.equal(getEnterpriseContractCapacity(blocked).available, 0);
+  assert.equal(simulateDays(blocked, 1).state.enterpriseContracts.length, 0);
+});
+
+test("Marketingfokus und Zielsegment veraendern die Nachfrage nachvollziehbar", () => {
+  const initial = { ...createInitialState(1_000), marketingBudget: 10_000 };
+  const baseline = getProductEconomics(initial, "product-circuit-one")?.demand ?? 0;
+  const awareness = gameReducer(initial, { type: "SET_MARKETING_FOCUS", focus: "awareness" });
+  const targeted = gameReducer(awareness, { type: "SET_MARKETING_TARGET", target: "budget" });
+
+  assert.ok((getProductEconomics(awareness, "product-circuit-one")?.demand ?? 0) > baseline);
+  assert.ok((getProductEconomics(targeted, "product-circuit-one")?.demand ?? 0) > (getProductEconomics(awareness, "product-circuit-one")?.demand ?? 0));
+});
+
+test("Beteiligungsstufen steigern Dividende und senken die Uebernahmeprämie", () => {
+  const initial = createInitialState(1_000);
+  const company = initial.competitors[0];
+  const strategic = { ...company, ownedShares: company.sharesOutstanding * 0.2 };
+  const board = { ...company, ownedShares: company.sharesOutstanding * 0.334 };
+
+  assert.equal(getStrategicStakeLevel(strategic).level, "partner");
+  assert.equal(getStrategicStakeLevel(board).level, "board");
+  assert.ok(getAcquisitionPrice(board) < getAcquisitionPrice(strategic));
+});
+
+test("Marktanteil blockiert weder Uebernahmen noch Fusionen", () => {
+  const dominant = {
+    ...createInitialState(1_000),
+    cash: 1_000_000_000_000,
+    marketShare: 99,
+  };
+  const acquisitionTarget = dominant.competitors.find((company) => company.id === "microfab");
+  const mergerTarget = dominant.competitors.find((company) => company.id === "coolwave");
+  assert.ok(acquisitionTarget);
+  assert.ok(mergerTarget);
+
+  const acquired = gameReducer(dominant, {
+    type: "ACQUIRE_COMPETITOR",
+    competitorId: acquisitionTarget.id,
+  });
+  assert.equal(
+    acquired.competitors.find((company) => company.id === acquisitionTarget.id)?.status,
+    "acquired",
+  );
+
+  const merged = gameReducer(dominant, {
+    type: "MERGE_COMPETITOR",
+    competitorId: mergerTarget.id,
+  });
+  assert.equal(
+    merged.competitors.find((company) => company.id === mergerTarget.id)?.status,
+    "merged",
+  );
+});
+
+test("Schwierigkeitsgrad wird nur vor Spielbeginn gesetzt und veraendert die Konkurrenz", () => {
+  const initial = createInitialState(1_000);
+  const hard = gameReducer(initial, { type: "SET_DIFFICULTY", difficulty: "hard" });
+  assert.equal(hard.cash, 100_000);
+  assert.equal(hard.difficulty, "hard");
+  assert.ok(
+    getCompetitorProductOffers(hard)[0].technology >
+      getCompetitorProductOffers(initial)[0].technology,
+  );
+  const running = gameReducer({ ...hard, day: 1 }, { type: "SET_DIFFICULTY", difficulty: "relaxed" });
+  assert.equal(running.difficulty, "hard");
+});
+
+test("neue Fachseiten bleiben beim Navigieren und Laden direkt erhalten", () => {
+  const initial = createInitialState(1_000);
+  for (const section of ["production", "people", "market", "finance", "stocks", "deals"] as const) {
+    const navigated = gameReducer(initial, { type: "SET_SECTION", section });
+    assert.equal(navigated.selectedSection, section);
+    assert.equal(mergeLoadedState(navigated)?.selectedSection, section);
+  }
+});
+
+test("ein neuer realistischer Spielstand besitzt mehr finanziellen Anlauf", () => {
+  const initial = createInitialState(1_000);
+  assert.equal(initial.cash, 225_000);
+  assert.equal(initial.maintenanceBudget, 100);
+  assert.equal(initial.marketingBudget, 200);
+});
+
+test("der Technologiemarkt besteht aus 100 eindeutig handelbaren Unternehmen", () => {
+  const initial = createInitialState(1_000);
+  assert.equal(initial.competitors.length, 100);
+  assert.equal(new Set(initial.competitors.map((company) => company.id)).size, 100);
+  assert.equal(new Set(initial.competitors.map((company) => company.ticker)).size, 100);
+  assert.ok(initial.competitors.filter((company) => company.pcSegment === "budget").length >= 10);
+  assert.ok(initial.competitors.filter((company) => company.pcSegment === "mainstream").length >= 10);
+  assert.ok(initial.competitors.filter((company) => company.pcSegment === "performance").length >= 10);
+  for (const company of initial.competitors) {
+    assert.ok(Number.isFinite(company.revenue) && company.revenue > 0);
+    assert.ok(Number.isFinite(company.price) && company.price > 0);
+    assert.ok(company.priceHistory.length > 0);
+  }
+});
+
+test("uebernommene Wettbewerber wachsen weiter und koennen vollstaendig verkauft werden", () => {
+  const initial = { ...createInitialState(1_000), cash: 1_000_000_000_000 };
+  const target = initial.competitors.find((company) => company.id === "bytecraft");
+  assert.ok(target);
+
+  const acquired = gameReducer(initial, {
+    type: "ACQUIRE_COMPETITOR",
+    competitorId: target.id,
+  });
+  const subsidiary = acquired.competitors.find((company) => company.id === target.id);
+  assert.ok(subsidiary);
+  assert.equal(subsidiary.status, "acquired");
+  assert.equal(subsidiary.acquisitionIntegrated, true);
+
+  const developed = simulateDays(acquired, 180).state;
+  const grownSubsidiary = developed.competitors.find((company) => company.id === target.id);
+  assert.ok(grownSubsidiary);
+  assert.equal(grownSubsidiary.status, "acquired");
+  assert.ok(grownSubsidiary.revenue > subsidiary.revenue);
+  assert.notEqual(grownSubsidiary.fairValue, subsidiary.fairValue);
+
+  const quote = getSubsidiaryExitQuote(grownSubsidiary);
+  const cashBefore = developed.cash;
+  const sold = gameReducer(developed, {
+    type: "DIVEST_COMPETITOR",
+    competitorId: target.id,
+  });
+  const independent = sold.competitors.find((company) => company.id === target.id);
+  assert.ok(independent);
+  assert.equal(independent.status, "active");
+  assert.equal(independent.ownedShares, 0);
+  assert.equal(independent.acquisitionIntegrated, true);
+  assertClose(sold.cash, cashBefore + quote.directSaleProceeds, 0.01);
+});
+
+test("ein Boersengang bringt eine Tochter zurueck an den Markt und behaelt 30 Prozent", () => {
+  const initial = { ...createInitialState(1_000), cash: 1_000_000_000_000 };
+  const target = initial.competitors.find((company) => company.id === "bytecraft");
+  assert.ok(target);
+  const acquired = gameReducer(initial, {
+    type: "ACQUIRE_COMPETITOR",
+    competitorId: target.id,
+  });
+  const subsidiary = acquired.competitors.find((company) => company.id === target.id);
+  assert.ok(subsidiary);
+  const quote = getSubsidiaryExitQuote(subsidiary);
+  const cashBefore = acquired.cash;
+
+  const listed = gameReducer(acquired, {
+    type: "RELIST_COMPETITOR",
+    competitorId: target.id,
+  });
+  const publicCompany = listed.competitors.find((company) => company.id === target.id);
+  assert.ok(publicCompany);
+  assert.equal(publicCompany.status, "active");
+  assert.equal(publicCompany.ownedShares, quote.ipoRetainedShares);
+  assert.equal(
+    publicCompany.ownedShares,
+    Math.round(publicCompany.sharesOutstanding * 0.3),
+  );
+  assertClose(listed.cash, cashBefore + quote.ipoProceeds, 0.01);
 });
