@@ -53,7 +53,7 @@ import {
   getOfflineSimulationDays,
   getSimulationPulse,
 } from "./time";
-import { mergeLoadedState } from "./use-game";
+import { mergeLoadedState, serializeState } from "./use-game";
 import type { GameState, PcPartCategory } from "./types";
 
 function starterProduct(state: GameState) {
@@ -1502,6 +1502,27 @@ test("der Technologiemarkt besteht aus 100 eindeutig handelbaren Unternehmen", (
     assert.ok(Number.isFinite(company.price) && company.price > 0);
     assert.ok(company.priceHistory.length > 0);
   }
+});
+
+test("taegliche Aktienhistorien werden nicht gespeichert und nach dem Laden neu aufgebaut", () => {
+  const running = simulateDays(createInitialState(1_000), 100).state;
+  assert.ok(running.competitors.every((company) => company.priceHistory.length === 90));
+
+  const serialized = serializeState(running, 2_000);
+  const parsed = JSON.parse(serialized) as GameState;
+  assert.ok(parsed.competitors.every((company) => !("priceHistory" in company)));
+  assert.ok(serialized.length < JSON.stringify(running).length * 0.5);
+
+  const loaded = mergeLoadedState(parsed);
+  assert.ok(loaded);
+  for (const company of loaded.competitors) {
+    assert.equal(company.priceHistory.length, 1);
+    assertClose(company.priceHistory[0].close, company.price);
+    assert.ok(company.history.length > 0);
+  }
+
+  const continued = simulateDays(loaded, 2).state;
+  assert.ok(continued.competitors.every((company) => company.priceHistory.length >= 2));
 });
 
 test("uebernommene Wettbewerber wachsen weiter und koennen vollstaendig verkauft werden", () => {

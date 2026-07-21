@@ -2659,15 +2659,25 @@ function normalizeLoadedState(imported: GameState) {
           marketSegment: product.marketSegment ?? (product.audience === "gaming" || product.audience === "creator" ? "performance" : "budget"),
       };
     }),
-    competitors: (imported.competitors ?? base.competitors).map((competitor) => ({
-      ...competitor,
-      history: [...competitor.history],
-      averageCost: finite(competitor.averageCost, competitor.ownedShares > 0 ? competitor.price : 0),
-      realizedProfit: finite(competitor.realizedProfit),
-      priceHistory: Array.isArray(competitor.priceHistory)
+    competitors: (imported.competitors ?? base.competitors).map((competitor) => {
+      const currentPrice = Math.max(0, finite(competitor.price));
+      const priceHistory = Array.isArray(competitor.priceHistory) && competitor.priceHistory.length
         ? competitor.priceHistory.map((point) => ({ ...point })).slice(-STOCK_DAILY_HISTORY_LIMIT)
-        : [],
-    })),
+        : [{
+            day: positiveInteger(imported.day),
+            open: currentPrice,
+            high: currentPrice,
+            low: currentPrice,
+            close: currentPrice,
+          }];
+      return {
+        ...competitor,
+        history: [...competitor.history],
+        averageCost: finite(competitor.averageCost, competitor.ownedShares > 0 ? competitor.price : 0),
+        realizedProfit: finite(competitor.realizedProfit),
+        priceHistory,
+      };
+    }),
     history: compactCompanyHistory([
       base.history[0],
       ...(imported.history ?? base.history).map((point) => ({

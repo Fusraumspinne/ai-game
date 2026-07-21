@@ -14,7 +14,7 @@ import {
   STARTER_PART_IDS,
 } from "./pc-system";
 
-export const GAME_VERSION = 24;
+export const GAME_VERSION = 25;
 export const STORAGE_KEY = "circuit-tycoon-save-v1";
 export const GAME_START_YEAR = 1984;
 export const DAYS_PER_MONTH = 30;

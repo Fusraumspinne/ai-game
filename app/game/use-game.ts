@@ -104,6 +104,8 @@ export function mergeLoadedState(input: unknown): GameState | null {
     const existing = loadedCompetitors.find((item) => item?.id === competitor.id);
     if (!existing) return competitor;
     const merged = { ...competitor, ...existing };
+    const currentPrice = Math.max(0, safeNumber(merged.price, competitor.price));
+    const currentDay = Math.max(0, Math.floor(safeNumber(parsed.day)));
     return {
       ...merged,
       averageCost:
@@ -114,9 +116,15 @@ export function mergeLoadedState(input: unknown): GameState | null {
             : 0,
       realizedProfit:
         typeof existing.realizedProfit === "number" ? existing.realizedProfit : 0,
-      priceHistory: Array.isArray(existing.priceHistory)
-        ? existing.priceHistory
-        : competitor.priceHistory,
+      // Tägliche OHLC-Daten werden absichtlich nicht persistiert. Ein einzelner
+      // valider Startpunkt hält Chart und Orders nach dem Laden funktionsfähig.
+      priceHistory: [{
+        day: currentDay,
+        open: currentPrice,
+        high: currentPrice,
+        low: currentPrice,
+        close: currentPrice,
+      }],
     };
   });
   const unlockedTech = Array.isArray(parsed.unlockedTech)
@@ -280,7 +288,7 @@ export function mergeLoadedState(input: unknown): GameState | null {
   };
 }
 
-function serializeState(state: GameState, now = Date.now()) {
+export function serializeState(state: GameState, now = Date.now()) {
   // Tageskennzahlen werden nach dem Laden neu berechnet. Eine Positivliste
   // verhindert, dass Produktstatistiken später versehentlich im Save landen.
   const products = state.products
@@ -304,7 +312,9 @@ function serializeState(state: GameState, now = Date.now()) {
   const competitors = state.competitors.map((competitor) => ({
     ...competitor,
     history: competitor.history.slice(-12),
-    priceHistory: competitor.priceHistory.slice(-90),
+    // Die täglichen Kurskerzen sind reine Laufzeitdaten und würden bei 100
+    // Unternehmen den Großteil des Speicherstands ausmachen.
+    priceHistory: undefined,
   }));
   return JSON.stringify({
     ...state,
